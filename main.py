@@ -1136,14 +1136,14 @@ class MusicOverlay(QWidget):
                 self.sizegrip.show()
                 self.sizegrip.raise_()
                 
-            self.save_position()
+            #self.save_position()
             if self.auto_reverse_pending:
                 self.auto_pop_timer.start(2500) 
         else:
             self.is_animating = False
             self.is_minimized = True
             self.setWindowOpacity(1.0)
-            self.save_position()
+            #self.save_position()
             
             screen = self.screen().availableGeometry()
             y_pos = self.expanded_geometry.y()
@@ -1449,7 +1449,10 @@ class MusicOverlay(QWidget):
             
     # cleanup
     def closeEvent(self, event):
-        self.save_position() 
+
+        if not self.is_minimized:
+            self.save_position() 
+
         self.audio_thread.stop()
         self.media_thread.stop()
         event.accept()
