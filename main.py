@@ -41,23 +41,18 @@ class BeatDetector:
         
     # detect beat (bass/broad)
     def is_beat(self, fft_data):
-        # bass window 1-4
         current_bass = np.mean(fft_data[1:5])
-        # broadband window 5-149
         current_broad = np.mean(fft_data[5:150])
 
         if len(self.history_bass) < self.history_size:
-            # warming history
             self.history_bass.append(current_bass)
             self.history_broad.append(current_broad)
-            return False, False 
+            return False, False
             
         avg_bass = np.mean(self.history_bass)
         avg_broad = np.mean(self.history_broad)
         
-        variance = np.var(self.history_bass)
-        threshold = avg_bass + (variance * 1.2)
-        bass_hit = current_bass > threshold
+        bass_hit = current_bass > (avg_bass * self.sens_bass) and current_bass > 0.05
         broad_hit = current_broad > (avg_broad * self.sens_broad) and current_broad > 0.08
         
         self.history_bass.append(current_bass)
@@ -120,7 +115,7 @@ class AudioThread(QThread):
         except ImportError:
             SoundcardRuntimeWarning = RuntimeWarning
 
-        # elevate thread priority
+        # Elevate this OS thread priority so Windows scheduler doesn't starve it
         try:
             import ctypes
             ctypes.windll.kernel32.SetThreadPriority(
@@ -1345,7 +1340,7 @@ class MusicOverlay(QWidget):
         
         # bar loop - collapse bands into visual bars, preserve transients
         for i, chunk in enumerate(chunks):
-            val = np.mean(chunk) * 0.7 + np.max(chunk) * 0.3 if len(chunk) > 0 else 0
+            val = np.max(chunk) if len(chunk) > 0 else 0
             bar_height = min(int(val), max_height) 
             
             painter.setBrush(gradient)
