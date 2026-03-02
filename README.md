@@ -21,3 +21,6 @@ pip install -r requirements.txt
 ```bash
 python main.py
 ```
+
+## EXE File
+[Download Latest Release](https://github.com)
