@@ -780,9 +780,19 @@ class MusicOverlay(QWidget):
 
     @pyqtSlot(str, str, bytes, str, float)
     def update_metadata(self, title, artist, image_bytes, app_id, duration):
+        
+        # change thumbnail only if it arrived late (every time)
+        if title == self.song_title and self.song_title != "Waiting for music...":
+            if image_bytes: 
+                self.album_pixmap.loadFromData(image_bytes)
+                self.extract_dominant_color()  # tween to the new background color
+                self.update()
+            return  # dont trigger fadeout
+
+        # otherwise new song
         self.pending_metadata = (title, artist, image_bytes, app_id, duration)
         
-        # if it's already running forward (fading in the previous song) reverse it
+        # if its already fading undo it
         if self.content_anim.state() == QAbstractAnimation.State.Running:
             if self.content_anim.direction() == QAbstractAnimation.Direction.Forward:
                 self.content_anim.setDirection(QAbstractAnimation.Direction.Backward)
@@ -790,7 +800,7 @@ class MusicOverlay(QWidget):
             self.content_anim.setDirection(QAbstractAnimation.Direction.Backward)
             self.content_anim.start()
             
-        # immediately fade out old lyrics on track change
+        # fade out old lyrics on track change
         if getattr(self, 'current_lyrics', None):
             self.lyrics_fade_anim.stop()
             self.lyrics_fade_anim.setStartValue(float(self.lyrics_opacity))
