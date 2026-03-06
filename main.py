@@ -280,46 +280,48 @@ class MediaThread(QThread):
                             current_update = timeline.last_updated_time
                             base_pos = timeline.position.total_seconds()
                             
-                            if expected_timeline_update_after and current_update < expected_timeline_update_after:
-                                internal_pos = 0.0
-                            else:
-                                expected_timeline_update_after = None
-
-                                if current_update != last_seen_update_time:
-                                    last_seen_update_time = current_update
-
-                                    now = datetime.datetime.now(datetime.timezone.utc)
-                                    age_of_update = max(0.0, (now - current_update).total_seconds())
-                                    os_target = (base_pos + age_of_update if is_playing else base_pos) + LYRIC_LEAD
-
-                                    print(f"OS UPDATE: target={os_target:.3f} internal={internal_pos:.3f} drift={os_target - internal_pos:.3f}")
-
-                                    drift = os_target - internal_pos
-                                    if internal_pos == 0.0 or abs(drift) > 2.0:
-                                        internal_pos = os_target
-                                        self._pending_tick = 0.0
-                                        last_os_target = None  # Hard snap — no nudge needed
-                                    else:
-                                        last_os_target = os_target
-                                        last_os_target_time = datetime.datetime.now(datetime.timezone.utc)
-
+                            old_timeline = False
+                            if expected_timeline_update_after:
+                                if current_update < expected_timeline_update_after:
+                                    old_timeline = True
                                 else:
-                                    # Drain hardware ticks
-                                    tick = self._pending_tick
-                                    self._pending_tick = 0.0
-                                    internal_pos += tick
+                                    expected_timeline_update_after = None
 
-                                    # Continuously nudge toward last known OS target every loop iteration
-                                    if last_os_target is not None and is_playing:
-                                        # Project where os_target should be now based on time since we received it
-                                        age = (datetime.datetime.now(datetime.timezone.utc) - last_os_target_time).total_seconds()
-                                        projected_target = last_os_target + age
-                                        
-                                        drift = projected_target - internal_pos
-                                        if abs(drift) > 0.05:
-                                            internal_pos += drift * 0.05  # Small factor — runs every 50ms so it accumulates fast
-                                        elif abs(drift) <= 0.05:
-                                            last_os_target = None
+                            if not old_timeline and current_update != last_seen_update_time:
+                                last_seen_update_time = current_update
+
+                                now = datetime.datetime.now(datetime.timezone.utc)
+                                age_of_update = max(0.0, (now - current_update).total_seconds())
+                                os_target = (base_pos + age_of_update if is_playing else base_pos) + LYRIC_LEAD
+
+                                print(f"OS UPDATE: target={os_target:.3f} internal={internal_pos:.3f} drift={os_target - internal_pos:.3f}")
+
+                                drift = os_target - internal_pos
+                                if internal_pos == 0.0 or abs(drift) > 2.0:
+                                    internal_pos = os_target
+                                    self._pending_tick = 0.0
+                                    last_os_target = None  # Hard snap
+                                else:
+                                    last_os_target = os_target
+                                    last_os_target_time = datetime.datetime.now(datetime.timezone.utc)
+
+                            # 3. Drain hardware ticks 
+                            else:
+                                tick = self._pending_tick
+                                self._pending_tick = 0.0
+                                internal_pos += tick
+
+                                # Continuously nudge toward last known OS target every loop iteration
+                                if not old_timeline and last_os_target is not None and is_playing:
+                                    # Project where os_target should be now based on time since recieved
+                                    age = (datetime.datetime.now(datetime.timezone.utc) - last_os_target_time).total_seconds()
+                                    projected_target = last_os_target + age
+                                    
+                                    drift = projected_target - internal_pos
+                                    if abs(drift) > 0.05:
+                                        internal_pos += drift * 0.05  # Small factor every 50ms so it accumulates fast
+                                    elif abs(drift) <= 0.05:
+                                        last_os_target = None
 
                             if current_duration > 0:
                                 internal_pos = min(internal_pos, current_duration)
@@ -942,6 +944,9 @@ class MusicOverlay(QWidget):
                     self.lyric_drag_start = event.globalPosition().toPoint()
                     self.lyric_drag_current = self.lyric_drag_start
                     self.is_dragging_lyrics_bar = True
+                if self.auto_pop_timer.isActive():
+                    self.auto_pop_timer.stop()
+                    self.auto_reverse_pending = False
                 event.accept()
                 return
                 
@@ -1175,7 +1180,6 @@ class MusicOverlay(QWidget):
 
     def on_lyrics_anim_finished(self):
         self.is_lyrics_animating = False
-        # FIX: Lock in the final geometry so window dragging/resizing doesn't break
         if not getattr(self, 'is_minimized', False) and not getattr(self, 'is_animating', False):
             self.expanded_geometry = self.geometry()
 
@@ -1189,7 +1193,7 @@ class MusicOverlay(QWidget):
         
     # scroll to active lyric
     def animate_lyric_scroll(self):
-        active_index = max(0, self.current_lyric_index - 1)
+        active_index = max(-1, self.current_lyric_index - 1)
         
         offset = min(15.0 + (active_index * 0), 40.0)
         target_y = 20.0 + (active_index * 50.0) - offset
@@ -1370,7 +1374,7 @@ class MusicOverlay(QWidget):
             painter.setFont(lyric_font)
             line_spacing = 50.0 
 
-            active_index = max(0, self.current_lyric_index - 1)
+            active_index = max(-1, self.current_lyric_index - 1)
             
             center_y = start_y + (active_index * line_spacing) - getattr(self, 'smooth_scroll_y', 0)
             
