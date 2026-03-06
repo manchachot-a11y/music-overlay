@@ -174,7 +174,8 @@ class AudioThread(QThread):
 
     def stop(self):
         self.running = False
-        self.wait()
+        self._data_ready.set()  # unblock the processing loop
+        self.wait(2000)
 
 # windows media API thread
 class MediaThread(QThread):
@@ -335,17 +336,21 @@ class MediaThread(QThread):
 
                 await asyncio.sleep(0.05)
 
-        asyncio.run(fetch_media())
-
         self._loop = asyncio.new_event_loop()
         asyncio.set_event_loop(self._loop)
-        self._loop.run_until_complete(fetch_media())
-        self._loop.close()
+        try:
+            self._loop.run_until_complete(fetch_media())
+        except RuntimeError as e:
+            if "Event loop stopped before Future completed" not in str(e):
+                raise  # re-raise anything unexpected
+        finally:
+            self._loop.close()
 
     def stop(self):
         self.running = False
-        self._data_ready.set()
-        self.wait()
+        if self._loop and self._loop.is_running():
+            self._loop.call_soon_threadsafe(self._loop.stop)
+        self.wait(2000)
 
 
 # sizegrip throttle
