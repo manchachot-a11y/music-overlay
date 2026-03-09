@@ -532,23 +532,55 @@ class MusicOverlay(QWidget):
         self.lyrics_fade_anim.valueChanged.connect(self._update_lyrics_opacity)
         self.lyrics_fade_anim.finished.connect(self._on_lyrics_fade_finished)
 
-        self.brightness_timer = QTimer(self)
-        self.brightness_timer.timeout.connect(self.update_background_brightness)
-        self.brightness_timer.start(250)
-
         self.audio_thread.audio_tick.connect(self.media_thread.on_audio_tick)
         
         self._smooth_brightness = 0.5
+        self._raw_brightness_lock = threading.Lock()
+        self._latest_raw_brightness = 0.5
+
+        self.brightness_timer = QTimer(self)
+        self.brightness_timer.timeout.connect(self._apply_brightness_lerp)
+        self.brightness_timer.start(100)  # lerp tick 
+
+        self._brightness_sample_timer = QTimer(self)
+        self._brightness_sample_timer.timeout.connect(self._trigger_brightness_sample)
+        self._brightness_sample_timer.start(1000)
 
     # hover alpha
     def _update_hover_alpha(self, val):
         self.hover_alpha = val
         self.update()
     
-    def update_background_brightness(self):
-        self.current_raw_brightness = self.get_background_brightness()
-        # lerp it :O
-        self._smooth_brightness += (self.current_raw_brightness - self._smooth_brightness) * 0.15
+    def _trigger_brightness_sample(self):
+        geom = self.geometry()
+        t = threading.Thread(target=self._sample_brightness_thread, args=(geom,), daemon=True)
+        t.start()
+
+    def _sample_brightness_thread(self, geom):
+        try:
+            import mss
+            with mss.mss() as sct:
+                brightnesses = []
+                for fx in [0.2, 0.5, 0.8]:
+                    for fy in [0.2, 0.5, 0.8]:
+                        sx = geom.x() + int(geom.width() * fx)
+                        sy = geom.y() + int(geom.height() * fy)
+                        monitor = {"top": sy, "left": sx, "width": 2, "height": 2}
+                        img = sct.grab(monitor)
+                        # mss BGRA -> RGB
+                        r, g, b = img.pixel(0, 0)[2], img.pixel(0, 0)[1], img.pixel(0, 0)[0]
+                        brightness = (0.299 * r + 0.587 * g + 0.114 * b) / 255.0
+                        brightnesses.append(brightness)
+            result = sum(brightnesses) / len(brightnesses)
+            with self._raw_brightness_lock:
+                self._latest_raw_brightness = result
+        except Exception:
+            pass
+
+    def _apply_brightness_lerp(self):
+        with self._raw_brightness_lock:
+            raw = self._latest_raw_brightness
+        self._smooth_brightness += (raw - self._smooth_brightness) * 0.08
         self.update()
 
     # lyrics opacity change
@@ -570,24 +602,6 @@ class MusicOverlay(QWidget):
                 self.lyrics_fade_anim.setEndValue(1.0)
                 self.lyrics_fade_anim.start()
     
-    # sample bg brightness
-    def get_background_brightness(self):
-        screen = self.screen()
-        if not screen: return 0.5
-        
-        geom = self.geometry()
-        # Sample a 100x100 patch from 9 points across the widget
-        brightnesses = []
-        for fx in [0.2, 0.5, 0.8]:
-            for fy in [0.2, 0.5, 0.8]:
-                sx = geom.x() + int(geom.width() * fx)
-                sy = geom.y() + int(geom.height() * fy)
-                pixmap = screen.grabWindow(0, sx, sy, 2, 2)
-                img = pixmap.toImage().scaled(1, 1,
-                    Qt.AspectRatioMode.IgnoreAspectRatio,
-                    Qt.TransformationMode.SmoothTransformation)
-                brightnesses.append(img.pixelColor(0, 0).valueF())
-        return sum(brightnesses) / len(brightnesses)
     
     def get_secondary_text_color(self, alpha_mult=1.0):
         import math
