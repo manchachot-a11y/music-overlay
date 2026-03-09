@@ -390,7 +390,7 @@ class MusicOverlay(QWidget):
             ctypes.windll.dwmapi.DwmSetWindowAttribute(hwnd, 34, ctypes.byref(ctypes.c_uint(0xFFFFFFFE)), 4)
             
             accent = ACCENT_POLICY()
-            accent.AccentState = 3 
+            accent.AccentState = 4
             
             data = WINDOWCOMPOSITIONATTRIBDATA()
             data.Attribute = 19 
@@ -534,9 +534,11 @@ class MusicOverlay(QWidget):
 
         self.brightness_timer = QTimer(self)
         self.brightness_timer.timeout.connect(self.update_background_brightness)
-        self.brightness_timer.start(1000)
+        self.brightness_timer.start(250)
 
         self.audio_thread.audio_tick.connect(self.media_thread.on_audio_tick)
+        
+        self._smooth_brightness = 0.5
 
     # hover alpha
     def _update_hover_alpha(self, val):
@@ -545,6 +547,9 @@ class MusicOverlay(QWidget):
     
     def update_background_brightness(self):
         self.current_raw_brightness = self.get_background_brightness()
+        # lerp it :O
+        self._smooth_brightness += (self.current_raw_brightness - self._smooth_brightness) * 0.15
+        self.update()
 
     # lyrics opacity change
     def _update_lyrics_opacity(self, val):
@@ -571,13 +576,27 @@ class MusicOverlay(QWidget):
         if not screen: return 0.5
         
         geom = self.geometry()
-        sample_rect = QRect(geom.x(), geom.y(), 100, 100)
+        # Sample a 100x100 patch from 9 points across the widget
+        brightnesses = []
+        for fx in [0.2, 0.5, 0.8]:
+            for fy in [0.2, 0.5, 0.8]:
+                sx = geom.x() + int(geom.width() * fx)
+                sy = geom.y() + int(geom.height() * fy)
+                pixmap = screen.grabWindow(0, sx, sy, 2, 2)
+                img = pixmap.toImage().scaled(1, 1,
+                    Qt.AspectRatioMode.IgnoreAspectRatio,
+                    Qt.TransformationMode.SmoothTransformation)
+                brightnesses.append(img.pixelColor(0, 0).valueF())
+        return sum(brightnesses) / len(brightnesses)
+    
+    def get_secondary_text_color(self, alpha_mult=1.0):
+        import math
+        norm = min(1.0, getattr(self, '_smooth_brightness', 0.5) / 0.7)
+        t = max(0.0, min(1.0, (norm - 0.29) / 0.36))
+        curved = (1 - math.cos(t * math.pi)) / 2
+        val = int(184 - 133 * curved)
+        return QColor(val, val, val, int(180 * alpha_mult))
         
-        pixmap = screen.grabWindow(0, sample_rect.x(), sample_rect.y(), sample_rect.width(), sample_rect.height())
-        img = pixmap.toImage().scaled(1, 1, Qt.AspectRatioMode.IgnoreAspectRatio, Qt.TransformationMode.SmoothTransformation)
-        brightness = img.pixelColor(0, 0).valueF()
-        return img.pixelColor(0, 0).valueF()
-
     # context menu
     def contextMenuEvent(self, event):
         context_menu = QMenu(self)
@@ -1365,7 +1384,7 @@ class MusicOverlay(QWidget):
             painter.setBrush(gradient)
             painter.drawRect(20 + (i * bar_spacing), self.base_height - 20, 5, -bar_height)
             
-            # reflection draw - faint mirror when expanded
+            # reflection draw faint mirror when expanded
             if expand_progress > 0 and bar_height > 0:
                 painter.setBrush(ref_gradient)
                 painter.drawRect(20 + (i * bar_spacing), self.base_height - 20, 5, int(bar_height * 0.6))
@@ -1415,7 +1434,7 @@ class MusicOverlay(QWidget):
                 if i == active_index:
                     color = QColor(255, 255, 255, int(255 * final_alpha_mult))
                 else:
-                    color = QColor(150, 150, 150, int(150 * final_alpha_mult))
+                    color = self.get_secondary_text_color(final_alpha_mult)
 
                 painter.setPen(color)
                 text_rect = QRectF(20, line_y - 20, self.width() - 40, 60)
