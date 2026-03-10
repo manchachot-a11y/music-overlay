@@ -1,6 +1,8 @@
 import requests
 import re
 from PyQt6.QtCore import QThread, pyqtSignal
+import sys
+from PyQt6.QtWidgets import QApplication
 from collections import namedtuple
 
 LyricLine = namedtuple("LyricLine", ['timestamp', 'content'])
@@ -28,7 +30,7 @@ class LyricsThread(QThread):
             self.start()
 
     def run(self):
-        # The loop ensures that if the track changes WHILE downloading, it loops again!
+        # The loop ensures that if the track changes while downloading, it loops again
         while True:
             current_track = self.track
             current_artist = self.artist
@@ -52,7 +54,7 @@ class LyricsThread(QThread):
                         
                         if not self.cached_results:
                             print("Lyrics: No synced matches found.")
-                            self.lyrics_loaded.emit([], None)
+                            self._emit_failed()
                             break
                             
                         if current_id:
@@ -67,16 +69,16 @@ class LyricsThread(QThread):
                         self._emit_current()
                         break
                 
-                # If it failed or returned nothing
+                # failure
                 if self.track == current_track:
                     print("Lyrics: Search returned no results.")
-                    self.lyrics_loaded.emit([], None)
+                    self._emit_failed()
                     break
                     
             except Exception as e:
                 print(f"Lyrics Error: {e}")
                 if self.track == current_track:
-                    self.lyrics_loaded.emit([], None)
+                    self._emit_failed()
                     break
 
     def _sort_and_pick_best(self, current_duration):
@@ -96,9 +98,11 @@ class LyricsThread(QThread):
         parsed = self.parse_lrc(result.get('syncedLyrics'))
         self.lyrics_loaded.emit(parsed, result.get('id'))
 
+    def _emit_failed(self):
+        self.lyrics_loaded.emit(LyricLine(0, "No Lyrics Available"), None)
+
     def parse_lrc(self, lrc_string):
         lyrics_list =[]
-        # FIX: The (?: ... )? makes the decimals optional for files that look like [01:23]
         pattern = re.compile(r'\[(\d+):(\d+(?:\.\d+)?)\](.*)')
 
         for line in lrc_string.splitlines():
@@ -115,3 +119,17 @@ class LyricsThread(QThread):
                 lyrics_list.append(LyricLine(total_time, text))
 
         return lyrics_list
+    
+if __name__ == "__main__":
+    app = QApplication(sys.argv)
+
+    def on_lyrics_loaded(lyrics, lyric_id):
+        print(lyrics[:5])
+        app.quit()
+
+    thread = LyricsThread()
+    thread.lyrics_loaded.connect(on_lyrics_loaded)
+
+    thread.fetch(track=input("Track: "), artist=input("Artist: "))
+
+    sys.exit(app.exec())
