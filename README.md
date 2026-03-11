@@ -23,4 +23,4 @@ python main.py
 ```
 
 ## EXE File
-[Download Latest Release](https://github.com)
+[Download Latest Release](https://github.com/manchachot-a11y/music-overlay/releases/latest)
