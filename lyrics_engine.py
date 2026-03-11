@@ -99,7 +99,7 @@ class LyricsThread(QThread):
         self.lyrics_loaded.emit(parsed, result.get('id'))
 
     def _emit_failed(self):
-        self.lyrics_loaded.emit(LyricLine(0, "No Lyrics Available"), None)
+        self.lyrics_loaded.emit([LyricLine(0.0, "No Lyrics Available")], None)
 
     def parse_lrc(self, lrc_string):
         lyrics_list =[]

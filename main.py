@@ -1452,7 +1452,10 @@ class MusicOverlay(QWidget):
 
                 painter.setPen(color)
                 text_rect = QRectF(20, line_y - 20, self.width() - 40, 60)
-                painter.drawText(text_rect, Qt.AlignmentFlag.AlignCenter | Qt.TextFlag.TextWordWrap, line.content)
+                if self.current_lrc_id != None:
+                    painter.drawText(text_rect, Qt.AlignmentFlag.AlignCenter | Qt.TextFlag.TextWordWrap, line.content)
+                else:
+                    painter.drawText(QRectF(20, start_y - 20, self.width() - 40, max_dist_bottom-5), Qt.AlignmentFlag.AlignCenter | Qt.TextFlag.TextWordWrap, line.content)
 
             painter.restore()
 
