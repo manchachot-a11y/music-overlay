@@ -11,6 +11,8 @@ from PyQt6.QtCore import Qt, QThread, pyqtSignal, pyqtSlot, QRect, QRectF, QVari
 # imports
 from lyrics_engine import LyricsThread
 import datetime
+from clicker import Clicker
+import keyboard
 
 # win11 blur structs
 class ACCENT_POLICY(ctypes.Structure):
@@ -545,6 +547,10 @@ class MusicOverlay(QWidget):
         self._brightness_sample_timer = QTimer(self)
         self._brightness_sample_timer.timeout.connect(self._trigger_brightness_sample)
         self._brightness_sample_timer.start(1000)
+
+        self.clicker = Clicker()
+        self.clicker.run_clicker()
+        keyboard.hook(self.clicker.keyboard_callback)
 
     # hover alpha
     def _update_hover_alpha(self, val):
