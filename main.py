@@ -10,6 +10,8 @@ from PyQt6.QtGui import QPainter, QColor, QFont, QPixmap, QLinearGradient, QPain
 from PyQt6.QtCore import Qt, QThread, pyqtSignal, pyqtSlot, QRect, QRectF, QVariantAnimation, QTimer, QAbstractAnimation, QEasingCurve
 # imports
 from lyrics_engine import LyricsThread
+from jam_controller import JamController
+from player_controller import SpicetifyController
 import datetime
 
 # win11 blur structs
@@ -189,6 +191,7 @@ class MediaThread(QThread):
         self.audio_is_silent = True
         self._pending_tick = 0.0  # No lock — GIL is sufficient for a float
         self._loop = None
+        self.current_pos = 0.0
 
     @pyqtSlot(bool)
     def set_audio_silence(self, is_silent):
@@ -328,6 +331,7 @@ class MediaThread(QThread):
                                 internal_pos = min(internal_pos, current_duration)
                                 
                             self.position_signal.emit(internal_pos)
+                            self.current_pos = internal_pos
 
                 except Exception:
                     if last_known_is_playing:
@@ -546,6 +550,57 @@ class MusicOverlay(QWidget):
         self._brightness_sample_timer.timeout.connect(self._trigger_brightness_sample)
         self._brightness_sample_timer.start(1000)
 
+        self.jam_broadcast_timer = QTimer(self)
+        self.jam_broadcast_timer.setInterval(1000)
+        self.jam_broadcast_timer.timeout.connect(self.jam_broadcast_tick)
+
+        self.spicetify = SpicetifyController(
+            on_connected=lambda: print("[Spicetify] Ready"),
+            on_disconnected=lambda: print("[Spicetify] Lost connection")
+        )
+        self.spicetify.start()
+
+        self.jam = JamController(
+            on_sync=self.handle_jam_sync,
+            on_host_left=self.handle_host_left,
+            on_room_not_found=self.handle_room_not_found
+        )
+
+    def handle_room_not_found(self):
+        from PyQt6.QtWidgets import QMessageBox
+        # must run on main thread
+        QTimer.singleShot(0, lambda: QMessageBox.warning(
+            self, "Jam", "Room not found. Check the code and try again."
+        ))
+
+    def handle_jam_sync(self, position, at_utc, title, artist):
+        import time
+        target = position + (time.time() - at_utc)
+        drift = target - self.media_thread.current_pos
+
+        print(f"[Jam] target={target:.2f} local={self.media_thread.current_pos:.2f} drift={drift:.2f}s title={title} artist={artist}")
+
+        # always seek on track change
+        track_changed = (title and title != self.song_title)
+
+        if track_changed or abs(drift) > 1.5:
+            print(f"[Jam] Seeking to {target:.2f} (track_changed={track_changed})")
+            self.spicetify.seek(target)
+
+    def handle_host_left(self):
+        print("[Jam] Host left — resuming local sync")
+        self.jam.disconnect()
+
+    def jam_broadcast_tick(self):
+        import time
+        if self.jam.is_host and self.jam.connected:
+            self.jam.broadcast(
+                self.media_thread.current_pos,
+                time.time(),
+                self.song_title,
+                self.song_artist
+            )
+
     # hover alpha
     def _update_hover_alpha(self, val):
         self.hover_alpha = val
@@ -613,6 +668,10 @@ class MusicOverlay(QWidget):
         
     # context menu
     def contextMenuEvent(self, event):
+        jam_host_action = None
+        jam_join_action = None
+        jam_leave_action = None
+
         context_menu = QMenu(self)
         context_menu.setStyleSheet("""
             QMenu { background-color: #2b2b2b; color: white; border: none; }
@@ -637,6 +696,18 @@ class MusicOverlay(QWidget):
 
         context_menu.addSeparator()
         quit_action = context_menu.addAction("Quit")
+
+
+
+        context_menu.addSeparator()
+        if getattr(self, 'jam', None) and self.jam.room_code:
+            jam_status = f"Jam: {self.jam.room_code} ({'Host' if self.jam.is_host else 'Guest'})"
+            jam_leave_action = context_menu.addAction(jam_status)
+            jam_leave_action = context_menu.addAction("Leave Jam")
+        else:
+            jam_host_action = context_menu.addAction("Host Jam")
+            jam_join_action = context_menu.addAction("Join Jam")
+        context_menu.addSeparator()
 
         action = context_menu.exec(self.mapToGlobal(event.pos()))
 
@@ -669,6 +740,27 @@ class MusicOverlay(QWidget):
             
         elif action == quit_action:
             self.close()
+
+        elif action is not None and action == jam_host_action:
+            import random
+            room_code = ''.join(random.choices('ABCDEFGHJKLMNPQRSTUVWXYZ23456789', k=5))
+            self.jam.host(room_code)
+            self.jam_broadcast_timer.start()
+            from PyQt6.QtWidgets import QMessageBox
+            QMessageBox.information(self, "Jam Started", f"Room code: {room_code}\nShare this with friends!")
+
+        elif action is not None and action == jam_join_action:
+            from PyQt6.QtWidgets import QInputDialog
+            code, ok = QInputDialog.getText(self, "Join Jam", "Enter room code:")
+            if ok and code.strip():
+                self.jam.join(code.strip().upper())
+
+        elif action is not None and action == jam_leave_action:
+            self.jam.disconnect()
+            self.jam_broadcast_timer.stop()
+            self.jam.room_code = None
+            self.jam.is_host = False
+            print("[Jam] Left room")
 
     @pyqtSlot(bool)
     # playback state
