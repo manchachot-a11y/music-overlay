@@ -40,6 +40,14 @@ class SpicetifyController:
     def toggle_play(self):
         self._send({"toggle_play": True})
 
+    def play_song(self, title, artist, seek_to=0.0):
+        self._send({
+            "play_song": {
+                "title": title,
+                "artist": artist,
+                "seek_after": round(seek_to, 3)
+            }
+        })
 
     def _send(self, data):
         if self._loop and self._ws and self.connected:
@@ -98,7 +106,10 @@ class SpicetifyController:
                 self.on_disconnected()
 
     def _handle_incoming(self, data):
-        print(f"[Spicetify] Incoming: {data}")
+        if "log" in data:
+            print(f"[Spicetify:ext] {data['log']}")
+        else:
+            print(f"[Spicetify] Incoming: {data}")
 
 
 class YTMusicController:
@@ -141,6 +152,23 @@ class YTMusicController:
         self._loop = asyncio.new_event_loop()
         asyncio.set_event_loop(self._loop)
         self._loop.run_until_complete(self._serve())
+
+    def play_song(self, title, artist, seek_to=0.0):
+        threading.Thread(target=self._search_and_play, args=(title, artist, seek_to), daemon=True).start()
+
+    def _search_and_play(self, title, artist, seek_to=0.0):
+        try:
+            from ytmusicapi import YTMusic
+            yt = YTMusic()
+            results = yt.search(f"{title} {artist}", filter="songs", limit=1)
+            if results:
+                video_id = results[0]["videoId"]
+                print(f"[YTMusic] Found: {results[0]['title']} — {video_id}")
+                self._send({"play_video": video_id, "seek_after": round(seek_to, 3)})
+            else:
+                print(f"[YTMusic] No results for: {title} {artist}")
+        except Exception as e:
+            print(f"[YTMusic] Search error: {e}")
 
     async def _serve(self):
         print(f"[YTMusic] Listening on ws://localhost:9002")
@@ -210,6 +238,18 @@ class PlayerRouter:
         if controller:
             controller.toggle_play()
 
+    def play_song(self, title, artist, seek_to=0.0):
+        controller = self._get_controller()
+        if controller:
+            if hasattr(controller, 'play_song'):
+                controller.play_song(title, artist, seek_to=seek_to)
+            else:
+                # spicetify can't navigate songs yet
+                print(f"[Player] play_song not supported for current controller, seeking only")
+                controller.seek(seek_to)
+        else:
+            print(f"[Player] No controller for app_id: {self._current_app_id}")
+
     @property
     def connected(self):
         controller = self._get_controller()
@@ -224,27 +264,85 @@ class PlayerRouter:
     
 
 if __name__ == "__main__":
-    controller = YTMusicController(
-        on_connected=lambda: print("YTMusic ready"),
-        on_disconnected=lambda: print("YTMusic disconnected")
-    )
-    controller.start()
+    print("Which controller to test?")
+    print("1. YT Music")
+    print("2. Spotify (Spicetify)")
+    print("3. Both (PlayerRouter)")
+    choice = input("> ").strip()
+
+    if choice == "1":
+        controller = YTMusicController(
+            on_connected=lambda: print("[YTMusic] ready"),
+            on_disconnected=lambda: print("[YTMusic] disconnected")
+        )
+        controller.start()
+        print("Waiting for YT Music extension to connect...")
+
+    elif choice == "2":
+        controller = SpicetifyController(
+            on_connected=lambda: print("[Spicetify] ready"),
+            on_disconnected=lambda: print("[Spicetify] disconnected")
+        )
+        controller.start()
+        print("Waiting for Spicetify extension to connect...")
+
+    elif choice == "3":
+        controller = PlayerRouter()
+        controller.start()
+        print("Waiting for extensions to connect...")
+        print("Set app_id with: app spotify / app ytm")
+
+    else:
+        print("Invalid choice")
+        exit()
+
+    print("Commands: s <seconds> = seek, p = play/pause, play <title> | <artist>, app <spotify|ytm> (router only), q = quit")
 
     try:
         while True:
-            cmd = input("> ").strip().lower()
-            if cmd.startswith("s "):
+            cmd = input("> ").strip()
+            lower = cmd.lower()
+
+            if lower.startswith("s "):
                 try:
-                    pos = float(cmd[2:])
+                    pos = float(lower[2:])
                     controller.seek(pos)
                     print(f"Seeking to {pos}s")
                 except ValueError:
                     print("Usage: s 30.5")
-            elif cmd == "p":
+
+            elif lower == "p":
                 controller.toggle_play()
-            elif cmd == "q":
+
+            elif lower.startswith("play "):
+                parts = cmd[5:].split("|")
+                if len(parts) == 2:
+                    title = parts[0].strip()
+                    artist = parts[1].strip()
+                    print(f"Searching for: {title} by {artist}")
+                    controller.play_song(title, artist, seek_to=0.0)
+                else:
+                    print("Usage: play <title> | <artist>")
+
+            elif lower.startswith("app ") and choice == "3":
+                app = lower[4:].strip()
+                if app == "spotify":
+                    controller.set_app_id("spotify")
+                    print("Routing to Spicetify")
+                elif app == "ytm":
+                    controller.set_app_id("chrome")
+                    print("Routing to YT Music")
+                else:
+                    print("Usage: app spotify / app ytm")
+
+            elif lower == "q":
                 break
+
+            else:
+                print("Unknown command")
+
     except KeyboardInterrupt:
         pass
     finally:
         controller.stop()
+        print("Stopped")

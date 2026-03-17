@@ -11,7 +11,7 @@ from PyQt6.QtCore import Qt, QThread, pyqtSignal, pyqtSlot, QRect, QRectF, QVari
 # imports
 from lyrics_engine import LyricsThread
 from jam_controller import JamController
-from player_controller import SpicetifyController
+from player_controller import PlayerRouter
 import datetime
 
 # win11 blur structs
@@ -554,11 +554,10 @@ class MusicOverlay(QWidget):
         self.jam_broadcast_timer.setInterval(1000)
         self.jam_broadcast_timer.timeout.connect(self.jam_broadcast_tick)
 
-        self.spicetify = SpicetifyController(
-            on_connected=lambda: print("[Spicetify] Ready"),
-            on_disconnected=lambda: print("[Spicetify] Lost connection")
-        )
-        self.spicetify.start()
+        self.player = PlayerRouter()
+        self.player.start()
+
+        self._jam_last_title = ""
 
         self.jam = JamController(
             on_sync=self.handle_jam_sync,
@@ -577,19 +576,25 @@ class MusicOverlay(QWidget):
         import time
         target = position + (time.time() - at_utc)
         drift = target - self.media_thread.current_pos
+        track_changed = (title and title != self._jam_last_title)
 
-        print(f"[Jam] target={target:.2f} local={self.media_thread.current_pos:.2f} drift={drift:.2f}s title={title} artist={artist}")
+        print(f"[Jam] target={target:.2f} local={self.media_thread.current_pos:.2f} drift={drift:.2f}s")
 
-        # always seek on track change
-        track_changed = (title and title != self.song_title)
-
-        if track_changed or abs(drift) > 1.5:
-            print(f"[Jam] Seeking to {target:.2f} (track_changed={track_changed})")
-            self.spicetify.seek(target)
+        if track_changed:
+            self._jam_last_title = title
+            print(f"[Jam] Track changed to: {title} by {artist} — navigating")
+            self.player.play_song(title, artist, seek_to=target)
+        elif abs(drift) > 1.5:
+            print(f"[Jam] Drift {drift:.2f}s — seeking to {target:.2f}")
+            self.player.seek(target)
 
     def handle_host_left(self):
         print("[Jam] Host left — resuming local sync")
         self.jam.disconnect()
+        
+    def handle_join_jam(self, room_code):
+        self._jam_last_title = ""
+        self.jam.join(room_code)
 
     def jam_broadcast_tick(self):
         import time
@@ -753,7 +758,7 @@ class MusicOverlay(QWidget):
             from PyQt6.QtWidgets import QInputDialog
             code, ok = QInputDialog.getText(self, "Join Jam", "Enter room code:")
             if ok and code.strip():
-                self.jam.join(code.strip().upper())
+                self.handle_join_jam(code.strip().upper())
 
         elif action is not None and action == jam_leave_action:
             self.jam.disconnect()
@@ -910,7 +915,7 @@ class MusicOverlay(QWidget):
 
     @pyqtSlot(str, str, bytes, str, float)
     def update_metadata(self, title, artist, image_bytes, app_id, duration):
-        
+        self.player.set_app_id(app_id)
         # change thumbnail only if it arrived late (every time)
         if title == self.song_title and self.song_title != "Waiting for music...":
             if image_bytes: 
@@ -1594,7 +1599,7 @@ class MusicOverlay(QWidget):
 
         if not self.is_minimized:
             self.save_position() 
-
+        self.player.stop()
         self.audio_thread.stop()
         self.media_thread.stop()
         event.accept()
