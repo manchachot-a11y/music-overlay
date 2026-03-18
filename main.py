@@ -13,6 +13,7 @@ from lyrics_engine import LyricsThread
 from jam_controller import JamController
 from player_controller import PlayerRouter
 import datetime
+from setup_wizard import run_setup_if_needed
 
 # win11 blur structs
 class ACCENT_POLICY(ctypes.Structure):
@@ -714,6 +715,8 @@ class MusicOverlay(QWidget):
             jam_join_action = context_menu.addAction("Join Jam")
         context_menu.addSeparator()
 
+        setup_action = context_menu.addAction("Re-run Setup")
+
         action = context_menu.exec(self.mapToGlobal(event.pos()))
 
         if action == whitelist_action:
@@ -766,6 +769,11 @@ class MusicOverlay(QWidget):
             self.jam.room_code = None
             self.jam.is_host = False
             print("[Jam] Left room")
+
+        elif action == setup_action:
+            from setup_wizard import SetupWizard
+            self._setup_wizard = SetupWizard()
+            self._setup_wizard.show()
 
     @pyqtSlot(bool)
     # playback state
@@ -1610,6 +1618,7 @@ class MusicOverlay(QWidget):
 # entry
 if __name__ == "__main__":
     app = QApplication(sys.argv)
+    run_setup_if_needed()
     window = MusicOverlay()
     window.show()
     sys.exit(app.exec())
