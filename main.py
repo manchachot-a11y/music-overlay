@@ -193,6 +193,7 @@ class MediaThread(QThread):
         self._pending_tick = 0.0  # No lock — GIL is sufficient for a float
         self._loop = None
         self.current_pos = 0.0
+        self.is_playing = True
 
     @pyqtSlot(bool)
     def set_audio_silence(self, is_silent):
@@ -240,6 +241,8 @@ class MediaThread(QThread):
                             self.playback_state_signal.emit(is_playing)
                             last_known_is_playing = is_playing
 
+                        self.is_playing = is_playing
+                        
                         app_id = session.source_app_user_model_id if session.source_app_user_model_id else ""
                         info = await session.try_get_media_properties_async()
                         
@@ -559,6 +562,7 @@ class MusicOverlay(QWidget):
         self.player.start()
 
         self._jam_last_title = ""
+        self._jam_is_playing = False
 
         self.jam = JamController(
             on_sync=self.handle_jam_sync,
@@ -573,7 +577,7 @@ class MusicOverlay(QWidget):
             self, "Jam", "Room not found. Check the code and try again."
         ))
 
-    def handle_jam_sync(self, position, at_utc, title, artist):
+    def handle_jam_sync(self, position, at_utc, title, artist, is_playing):
         import time
         target = position + (time.time() - at_utc)
         drift = target - self.media_thread.current_pos
@@ -581,11 +585,17 @@ class MusicOverlay(QWidget):
 
         print(f"[Jam] target={target:.2f} local={self.media_thread.current_pos:.2f} drift={drift:.2f}s")
 
+        # Pause sync
+        if is_playing != self._jam_is_playing:
+            self._jam_is_playing = is_playing
+            print(f"[Jam] Playback state changed to: {'playing' if is_playing else 'paused'}")
+            self.player.toggle_play()
+
         if track_changed:
             self._jam_last_title = title
-            print(f"[Jam] Track changed to: {title} by {artist} — navigating")
+            print(f"[Jam] Track changed to: {title} by {artist}")
             self.player.play_song(title, artist, seek_to=target)
-        elif abs(drift) > 1.5:
+        elif abs(drift) > 1.5 and is_playing:
             print(f"[Jam] Drift {drift:.2f}s — seeking to {target:.2f}")
             self.player.seek(target)
 
@@ -604,7 +614,8 @@ class MusicOverlay(QWidget):
                 self.media_thread.current_pos,
                 time.time(),
                 self.song_title,
-                self.song_artist
+                self.song_artist,
+                self.media_thread.is_playing  #instead of silence frames
             )
 
     # hover alpha

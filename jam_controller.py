@@ -39,7 +39,7 @@ class JamController:
         self.is_host = False
         self._start(room_code, is_host=False)
 
-    def broadcast(self, position, at_utc, title="", artist=""):
+    def broadcast(self, position, at_utc, title="", artist="", is_playing=True):
         if not self.is_host or not self.connected:
             return
         self._send({
@@ -47,7 +47,8 @@ class JamController:
             "position": position,
             "at_utc": at_utc,
             "title": title,
-            "artist": artist
+            "artist": artist,
+            "is_playing": is_playing
         })
 
     def disconnect(self):
@@ -122,7 +123,7 @@ class JamController:
 
         if msg_type == "sync" and not self.is_host:
             if self.on_sync:
-                self.on_sync(data["position"], data["at_utc"], data.get("title", ""), data.get("artist", ""))
+                self.on_sync(data["position"], data["at_utc"], data.get("title", ""), data.get("artist", ""), data.get("is_playing", True))
 
         elif msg_type == "peer_joined":
             if self.on_peer_joined:
