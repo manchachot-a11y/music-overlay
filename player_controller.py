@@ -231,12 +231,17 @@ class PlayerRouter:
         if controller:
             controller.seek(position_seconds)
         else:
-            print(f"[Player] No controller for app_id: {self._current_app_id}")
+            print(f"[Player] No connected controller - skipping seek")
 
-    def toggle_play(self):
+    def play_song(self, title, artist, seek_to=0.0):
         controller = self._get_controller()
         if controller:
-            controller.toggle_play()
+            if hasattr(controller, 'play_song'):
+                controller.play_song(title, artist, seek_to=seek_to)
+            else:
+                controller.seek(seek_to)
+        else:
+            print(f"[Player] No connected controller - skipping play_song")
 
     def play_song(self, title, artist, seek_to=0.0):
         controller = self._get_controller()
@@ -260,6 +265,11 @@ class PlayerRouter:
             return self.spicetify
         elif "chrome" in self._current_app_id or "msedge" in self._current_app_id:
             return self.ytmusic
+        
+        if self.ytmusic.connected:
+            return self.ytmusic
+        if self.spicetify.connected:
+            return self.spicetify
         return None
     
 

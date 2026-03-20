@@ -29,6 +29,8 @@ class JamController:
         self._thread = None
         self._running = False
 
+        self.clock_offset = 0.0
+
     def host(self, room_code):
         self.room_code = room_code
         self.is_host = True
@@ -97,6 +99,10 @@ class JamController:
                     # successful join
                     self.connected = True
                     print(f"[Jam] Connected. room={self.room_code} host={self.is_host}")
+
+                    if not self.is_host:
+                        await self._sync_clock(ws)
+
                     async for raw in ws:
                         if not self._running:
                             break
@@ -138,12 +144,45 @@ class JamController:
             if self.on_host_left:
                 self.on_host_left()
 
+        elif msg_type == "ping" and self.is_host:
+            import time
+            self._send({
+                "type": "pong",
+                "client_time": data['client'],
+                "host_time": time.time()
+            })
+            return
+
     def _send(self, data):
         if self._loop and self._ws and self.connected:
             asyncio.run_coroutine_threadsafe(
                 self._ws.send(json.dumps(data)),
                 self._loop
             )
+
+    async def _sync_clock(self, ws):
+        import time
+        offsets = []
+
+        for _ in range(5):
+            t0 = time.time()
+            await ws.send(json.dumps({"type": "ping", "client_time": t0}))
+            raw = await asyncio.wait_for(ws.recv(), timeout = 5.0)
+            t2 = time.time()
+            data = json.loads(raw)
+            if data.get("type") == "pong":
+                t1 = data["host_time"]
+                rtt = t2 - t0
+                offset = t1 - (t0 + rtt / 2)
+                offsets.append(offset)
+            await asyncio.sleep(0.1)
+
+        if offsets:
+            self.clock_offset = sum(offsets) / len(offsets)
+            print(f"[Jam] Clock offset: {self.clock_offset*1000:.1f}ms")
+        else:
+            self.clock_offset = 0.0
+
 
 if __name__ == "__main__":
     import sys

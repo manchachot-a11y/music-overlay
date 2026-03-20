@@ -1,3 +1,8 @@
+#TODO: no controller for app_id when joining jam without yt music open (hopefully fixed)
+#      - Recalculate UTC? bad sync (done for now)
+#      - 
+
+
 import sys
 import json
 import os
@@ -579,7 +584,7 @@ class MusicOverlay(QWidget):
 
     def handle_jam_sync(self, position, at_utc, title, artist, is_playing):
         import time
-        target = position + (time.time() - at_utc)
+        target = position + (time.time() - at_utc) + self.jam.clock_offset
         drift = target - self.media_thread.current_pos
         track_changed = (title and title != self._jam_last_title)
 
@@ -595,7 +600,7 @@ class MusicOverlay(QWidget):
             self._jam_last_title = title
             print(f"[Jam] Track changed to: {title} by {artist}")
             self.player.play_song(title, artist, seek_to=target)
-        elif abs(drift) > 1.5 and is_playing:
+        elif abs(drift) > 0.5 and is_playing:
             print(f"[Jam] Drift {drift:.2f}s — seeking to {target:.2f}")
             self.player.seek(target)
 
@@ -798,6 +803,17 @@ class MusicOverlay(QWidget):
             if not self.is_minimized and not self.is_animating:
                 self.pause_timer.start()
 
+        # Immediately broadcast state change as host
+        if getattr(self, 'jam', None) and self.jam.is_host and self.jam.connected:
+            import time
+            self.jam.broadcast(
+                self.media_thread.current_pos,
+                time.time(),
+                self.song_title,
+                self.song_artist,
+                is_playing
+            )
+
     # pause handler
     def on_music_paused(self):
         if not self.is_minimized and not self.is_animating:
@@ -967,6 +983,19 @@ class MusicOverlay(QWidget):
         if not getattr(self, 'current_lyrics', None):
             return
             
+        if getattr(self, 'jam', None) and self.jam.is_host and self.jam.connected:
+            last = getattr(self, '_last_broadcast_pos', 0.0)
+            if abs(pos_seconds - last) > 2.0:  # scrub
+                import time
+                self.jam.broadcast(
+                    pos_seconds,
+                    time.time(),
+                    self.song_title,
+                    self.song_artist,
+                    self.media_thread.is_playing
+                )
+            self._last_broadcast_pos = pos_seconds
+
         if self.current_lyric_index > 0 and pos_seconds < self.current_lyrics[self.current_lyric_index - 1].timestamp:
             self.current_lyric_index = 0
             self.animate_lyric_scroll()
