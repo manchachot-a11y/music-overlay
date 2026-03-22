@@ -101,6 +101,8 @@ class JamController:
                     print(f"[Jam] Connected. room={self.room_code} host={self.is_host}")
 
                     if not self.is_host:
+                        print("SYNCING TO JAM")
+                        self.clock_offset = 0.0
                         await self._sync_clock(ws)
 
                     async for raw in ws:

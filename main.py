@@ -1,7 +1,4 @@
-#TODO: no controller for app_id when joining jam without yt music open (hopefully fixed)
-#      - Recalculate UTC? bad sync (done for now)
-#      - 
-
+#TODO: - No lyrics available on some songs, fixed on switch
 
 import sys
 import json
@@ -310,7 +307,7 @@ class MediaThread(QThread):
                                 print(f"OS UPDATE: target={os_target:.3f} internal={internal_pos:.3f} drift={os_target - internal_pos:.3f}")
 
                                 drift = os_target - internal_pos
-                                if internal_pos == 0.0 or abs(drift) > 2.0:
+                                if internal_pos == 0.0 or abs(drift) > 0.5:
                                     internal_pos = os_target
                                     self._pending_tick = 0.0
                                     last_os_target = None  # Hard snap

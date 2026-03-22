@@ -255,6 +255,16 @@ class PlayerRouter:
         else:
             print(f"[Player] No controller for app_id: {self._current_app_id}")
 
+
+    def toggle_play(self):
+        controller = self._get_controller()
+        if controller:
+            if hasattr(controller, 'toggle_play'):
+                controller.toggle_play()
+            else:
+                #TODO: media keys fallback
+                pass
+
     @property
     def connected(self):
         controller = self._get_controller()
