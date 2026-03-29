@@ -1461,18 +1461,18 @@ class MusicOverlay(QWidget):
             else:
                 painter.drawText(20, 45, self.song_title)
 
-            artist_alpha = int(180 * self.content_opacity)
+            artist_alpha = int(130 * self.content_opacity)
             artist_font = QFont("Segoe UI", 10)
             artist_fm = QFontMetrics(artist_font)
             artist_w = artist_fm.horizontalAdvance(self.song_artist)
 
             artist_grad = QLinearGradient(20, 0, 20 + text_rect_width, 0)
-            artist_grad.setColorAt(0.0, QColor(180, 180, 180, artist_alpha))
+            artist_grad.setColorAt(0.0, QColor(255, 255, 255, artist_alpha))
             if artist_w > text_rect_width:
-                artist_grad.setColorAt(0.85, QColor(180, 180, 180, artist_alpha))
-                artist_grad.setColorAt(1.0, QColor(180, 180, 180, 0))
+                artist_grad.setColorAt(0.85, QColor(255, 255, 255, artist_alpha))
+                artist_grad.setColorAt(1.0, QColor(255, 255, 255, 0))
             else:
-                artist_grad.setColorAt(1.0, QColor(180, 180, 180, artist_alpha))
+                artist_grad.setColorAt(1.0, QColor(255, 255, 255, artist_alpha))
 
             painter.setPen(QPen(QBrush(artist_grad), 1))
             painter.setFont(artist_font)
@@ -1590,7 +1590,7 @@ class MusicOverlay(QWidget):
                 if i == active_index:
                     color = QColor(255, 255, 255, int(255 * final_alpha_mult))
                 else:
-                    color = self.get_secondary_text_color(final_alpha_mult)
+                    color = QColor(255, 255, 255, int(160 * final_alpha_mult))
 
                 painter.setPen(color)
                 text_rect = QRectF(20, line_y - 20, self.width() - 40, 60)

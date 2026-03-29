@@ -147,7 +147,6 @@ class JamController:
                 self.on_host_left()
 
         elif msg_type == "ping" and self.is_host:
-            import time
             self._send({
                 "type": "pong",
                 "client_time": data['client'],
@@ -163,7 +162,6 @@ class JamController:
             )
 
     async def _sync_clock(self, ws):
-        import time
         offsets = []
 
         for _ in range(5):

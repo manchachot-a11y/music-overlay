@@ -239,17 +239,7 @@ class PlayerRouter:
             if hasattr(controller, 'play_song'):
                 controller.play_song(title, artist, seek_to=seek_to)
             else:
-                controller.seek(seek_to)
-        else:
-            print(f"[Player] No connected controller - skipping play_song")
-
-    def play_song(self, title, artist, seek_to=0.0):
-        controller = self._get_controller()
-        if controller:
-            if hasattr(controller, 'play_song'):
-                controller.play_song(title, artist, seek_to=seek_to)
-            else:
-                # spicetify can't navigate songs yet
+                # other apps
                 print(f"[Player] play_song not supported for current controller, seeking only")
                 controller.seek(seek_to)
         else:
