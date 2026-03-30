@@ -273,14 +273,14 @@ class MediaThread(QThread):
                                 
                                 if title_changed:
                                     if not is_first_boot:
-                                        # Track skip — engage limbo lock to ignore stale ghost data
+                                        # Track skip, engage limbo lock to ignore stale ghost data
                                         expected_timeline_update_after = datetime.datetime.now(datetime.timezone.utc)
                                         last_seen_update_time = None
                                         internal_pos = 0.0
                                         self._pending_tick = 0.0
                                         self.position_signal.emit(0.0)
                                     else:
-                                        # Startup — bypass limbo and let the OS snap fire immediately
+                                        # Startup, bypass limbo and let the OS snap fire immediately
                                         expected_timeline_update_after = None
                                         last_seen_update_time = None
                                         self._pending_tick = 0.0
@@ -315,7 +315,7 @@ class MediaThread(QThread):
                                     last_os_target = os_target
                                     last_os_target_time = datetime.datetime.now(datetime.timezone.utc)
 
-                            # 3. Drain hardware ticks 
+                            # Drain hardware ticks 
                             else:
                                 tick = self._pending_tick
                                 self._pending_tick = 0.0
@@ -510,6 +510,7 @@ class MusicOverlay(QWidget):
         self.setMouseTracking(True) 
         self.lyrics_expanded = False
         self.hovering_lyrics_tab = False
+        self.hovering_next = False
         self.base_height = 150
         self.expanded_lyrics_height = 400 
         
@@ -534,6 +535,16 @@ class MusicOverlay(QWidget):
         self.hover_anim.setDuration(250)
         self.hover_anim.valueChanged.connect(self._update_hover_alpha)
 
+        self.prev_alpha = 0.0
+        self.prev_anim = QVariantAnimation(self)
+        self.prev_anim.setDuration(250)
+        self.prev_anim.valueChanged.connect(self._update_prev_alpha)
+
+        self.next_alpha = 0.0
+        self.next_anim = QVariantAnimation(self)
+        self.next_anim.setDuration(250)
+        self.next_anim.valueChanged.connect(self._update_next_alpha)
+
         self.lyrics_opacity = 1.0
         self.pending_lyrics = None
         self.lyrics_fade_anim = QVariantAnimation(self)
@@ -543,18 +554,6 @@ class MusicOverlay(QWidget):
         self.lyrics_fade_anim.finished.connect(self._on_lyrics_fade_finished)
 
         self.audio_thread.audio_tick.connect(self.media_thread.on_audio_tick)
-        
-        self._smooth_brightness = 0.5
-        self._raw_brightness_lock = threading.Lock()
-        self._latest_raw_brightness = 0.5
-
-        self.brightness_timer = QTimer(self)
-        self.brightness_timer.timeout.connect(self._apply_brightness_lerp)
-        self.brightness_timer.start(100)  # lerp tick 
-
-        self._brightness_sample_timer = QTimer(self)
-        self._brightness_sample_timer.timeout.connect(self._trigger_brightness_sample)
-        self._brightness_sample_timer.start(1000)
 
         self.jam_broadcast_timer = QTimer(self)
         self.jam_broadcast_timer.setInterval(1000)
@@ -624,38 +623,15 @@ class MusicOverlay(QWidget):
     def _update_hover_alpha(self, val):
         self.hover_alpha = val
         self.update()
-    
-    def _trigger_brightness_sample(self):
-        geom = self.geometry()
-        t = threading.Thread(target=self._sample_brightness_thread, args=(geom,), daemon=True)
-        t.start()
 
-    def _sample_brightness_thread(self, geom):
-        try:
-            import mss
-            with mss.mss() as sct:
-                brightnesses = []
-                for fx in [0.2, 0.5, 0.8]:
-                    for fy in [0.2, 0.5, 0.8]:
-                        sx = geom.x() + int(geom.width() * fx)
-                        sy = geom.y() + int(geom.height() * fy)
-                        monitor = {"top": sy, "left": sx, "width": 2, "height": 2}
-                        img = sct.grab(monitor)
-                        # mss BGRA -> RGB
-                        r, g, b = img.pixel(0, 0)[2], img.pixel(0, 0)[1], img.pixel(0, 0)[0]
-                        brightness = (0.299 * r + 0.587 * g + 0.114 * b) / 255.0
-                        brightnesses.append(brightness)
-            result = sum(brightnesses) / len(brightnesses)
-            with self._raw_brightness_lock:
-                self._latest_raw_brightness = result
-        except Exception:
-            pass
-
-    def _apply_brightness_lerp(self):
-        with self._raw_brightness_lock:
-            raw = self._latest_raw_brightness
-        self._smooth_brightness += (raw - self._smooth_brightness) * 0.08
+    def _update_prev_alpha(self, val):
+        self.prev_alpha = float(val)
         self.update()
+
+    def _update_next_alpha(self, val):
+        self.next_alpha = float(val)
+        self.update()
+    
 
     # lyrics opacity change
     def _update_lyrics_opacity(self, val):
@@ -675,16 +651,7 @@ class MusicOverlay(QWidget):
                 self.lyrics_fade_anim.setStartValue(0.0)
                 self.lyrics_fade_anim.setEndValue(1.0)
                 self.lyrics_fade_anim.start()
-    
-    
-    def get_secondary_text_color(self, alpha_mult=1.0):
-        import math
-        norm = min(1.0, getattr(self, '_smooth_brightness', 0.5) / 0.7)
-        t = max(0.0, min(1.0, (norm - 0.29) / 0.36))
-        curved = (1 - math.cos(t * math.pi)) / 2
-        val = int(184 - 133 * curved)
-        return QColor(val, val, val, int(180 * alpha_mult))
-        
+
     # context menu
     def contextMenuEvent(self, event):
         jam_host_action = None
@@ -1114,13 +1081,30 @@ class MusicOverlay(QWidget):
         super().resizeEvent(event)
 
     def leaveEvent(self, event):
-        # hover leave
+        # Reset lyrics tab hover
         if getattr(self, 'hovering_lyrics_tab', False):
             self.hovering_lyrics_tab = False
             self.hover_anim.stop()
             self.hover_anim.setStartValue(float(getattr(self, 'hover_alpha', 0.0)))
             self.hover_anim.setEndValue(0.0)
             self.hover_anim.start()
+
+        # Reset NEXT hover
+        if getattr(self, 'hovering_next', False):
+            self.hovering_next = False
+            self.next_anim.stop()
+            self.next_anim.setStartValue(float(getattr(self, 'next_alpha', 0.0)))
+            self.next_anim.setEndValue(0.0)
+            self.next_anim.start()
+
+        # Reset PREV hover
+        if getattr(self, 'hovering_prev', False):
+            self.hovering_prev = False
+            self.prev_anim.stop()
+            self.prev_anim.setStartValue(float(getattr(self, 'prev_alpha', 0.0)))
+            self.prev_anim.setEndValue(0.0)
+            self.prev_anim.start()
+
         super().leaveEvent(event)
 
     def mousePressEvent(self, event):
@@ -1139,7 +1123,19 @@ class MusicOverlay(QWidget):
                     self.auto_reverse_pending = False
                 event.accept()
                 return
-                
+
+            pause_rect = QRect(self.width() - 90, 15, 70, 70)
+            if pause_rect.contains(event.pos()) and not self.is_minimized:
+                self.player.toggle_play()
+
+            prev_rect = QRect(0, 30, 30, int(self.height() - 55))
+            if prev_rect.contains(event.pos()) and not self.is_minimized:
+                self.player.prev_track()
+
+            next_rect = QRect(self.width() - 30, 30, 31, int(self.height() - 55))
+            if next_rect.contains(event.pos()) and not self.is_minimized:
+                self.player.next_track()
+
             if self.auto_pop_timer.isActive():
                 self.auto_pop_timer.stop()
                 self.auto_reverse_pending = False
@@ -1165,16 +1161,31 @@ class MusicOverlay(QWidget):
 
     def mouseMoveEvent(self, event):
         hover_rect = QRect(40, self.height() - 25, self.width() - 80, 25)
-        
         is_hover = hover_rect.contains(event.pos()) or getattr(self, 'is_dragging_lyrics_bar', False)
-        
         if is_hover != getattr(self, 'hovering_lyrics_tab', False):
             self.hovering_lyrics_tab = is_hover
-            
             self.hover_anim.stop()
             self.hover_anim.setStartValue(float(getattr(self, 'hover_alpha', 0.0)))
             self.hover_anim.setEndValue(1.0 if is_hover else 0.0)
             self.hover_anim.start()
+
+        next_rect = QRect(self.width() - 30, 0, 31, self.height())
+        is_next = next_rect.contains(event.pos())
+        if is_next != getattr(self, 'hovering_next', False):
+            self.hovering_next = is_next
+            self.next_anim.stop()
+            self.next_anim.setStartValue(float(getattr(self, 'next_alpha', 0.0)))
+            self.next_anim.setEndValue(1.0 if is_next else 0.0) 
+            self.next_anim.start()
+
+        prev_rect = QRect(0, 0, 30, self.height())
+        is_prev = prev_rect.contains(event.pos())
+        if is_prev != getattr(self, 'hovering_prev', False):
+            self.hovering_prev = is_prev
+            self.prev_anim.stop()
+            self.prev_anim.setStartValue(float(getattr(self, 'prev_alpha', 0.0)))
+            self.prev_anim.setEndValue(1.0 if is_prev else 0.0) 
+            self.prev_anim.start()
 
         if event.buttons() == Qt.MouseButton.LeftButton:
             
@@ -1545,6 +1556,10 @@ class MusicOverlay(QWidget):
                 painter.setBrush(ref_gradient)
                 painter.drawRect(20 + (i * bar_spacing), self.base_height - 20, 5, int(bar_height * 0.6))
 
+        painter.setBrush(QColor(255, 255, 255, 255))
+        #painter.drawRect(0, 30, 20, int(self.height() - 55))
+        #painter.drawRect(self.width() - 20, 30, 20, int(self.height() - 55))
+
         if getattr(self, 'expanded_lyrics_height', 0) > self.base_height:
             diff = self.expanded_lyrics_height - self.base_height
             expand_progress = (self.height() - self.base_height) / diff if diff > 0 else 0.0
@@ -1636,6 +1651,86 @@ class MusicOverlay(QWidget):
             
             caret_char = "ʌ" if getattr(self, 'lyrics_expanded', False) or getattr(self, 'is_lyrics_animating', False) else "v"
             painter.drawText(hover_rect, Qt.AlignmentFlag.AlignCenter, caret_char)
+            
+            painter.restore()
+
+        if getattr(self, 'next_alpha', 0.0) > 0.0 and not self.is_minimized:
+            painter.save()
+            next_draw_rect = QRectF(self.width() - 20, 0, 20, self.height())
+            cx = float(self.width())
+            cy = next_draw_rect.height() / 2.0
+            rx = 20.0
+            ry = max(1.0, next_draw_rect.height() / 1.5)
+
+            # Gradient Glow
+            grad = QRadialGradient(cx, cy, rx)
+            grad.setFocalPoint(cx, cy)
+            grad.setColorAt(0.0, QColor(0, 0, 0, int(150 * self.next_alpha)))
+            grad.setColorAt(1.0, QColor(0, 0, 0, 0))
+
+            brush = QBrush(grad)
+            matrix = QTransform()
+            matrix.translate(cx, cy)
+            matrix.scale(1.0, ry / rx) 
+            matrix.translate(-cx, -cy)
+            brush.setTransform(matrix)
+
+            painter.setBrush(brush)
+            painter.setPen(Qt.PenStyle.NoPen)
+            painter.drawRect(next_draw_rect.toRect())
+            
+            # Vector Icon
+            icon_alpha = int(120 * self.next_alpha)
+            painter.setBrush(QColor(255, 255, 255, icon_alpha))
+            icon_cx = self.width() - 10.0
+            
+            painter.drawRect(QRectF(icon_cx + 3, cy - 6, 2, 12)) # Bar
+            path = QPainterPath()
+            path.moveTo(icon_cx - 4, cy - 6) # Top left
+            path.lineTo(icon_cx - 4, cy + 6) # Bottom left
+            path.lineTo(icon_cx + 2, cy)     # Middle right
+            path.closeSubpath()
+            painter.drawPath(path) # Triangle
+            
+            painter.restore()
+
+        if getattr(self, 'prev_alpha', 0.0) > 0.0 and not self.is_minimized:
+            painter.save()
+            prev_draw_rect = QRectF(0, 0, 20, self.height())
+            cx = 0.0
+            cy = prev_draw_rect.height() / 2.0
+            rx = 20.0
+            ry = max(1.0, prev_draw_rect.height() / 1.5)
+
+            # Gradient Glow
+            grad = QRadialGradient(cx, cy, rx)
+            grad.setFocalPoint(cx, cy)
+            grad.setColorAt(0.0, QColor(0, 0, 0, int(150 * self.prev_alpha)))
+            grad.setColorAt(1.0, QColor(0, 0, 0, 0))
+
+            brush = QBrush(grad)
+            matrix = QTransform()
+            matrix.translate(cx, cy)
+            matrix.scale(1.0, ry / rx) 
+            matrix.translate(-cx, -cy)
+            brush.setTransform(matrix)
+
+            painter.setBrush(brush)
+            painter.setPen(Qt.PenStyle.NoPen)
+            painter.drawRect(prev_draw_rect.toRect())
+            
+            # Vector Icon
+            icon_alpha = int(120 * self.prev_alpha)
+            painter.setBrush(QColor(255, 255, 255, icon_alpha))
+            icon_cx = 10.0
+            
+            painter.drawRect(QRectF(icon_cx - 5, cy - 6, 2, 12)) # Bar
+            path = QPainterPath()
+            path.moveTo(icon_cx + 4, cy - 6) # Top right
+            path.lineTo(icon_cx + 4, cy + 6) # Bottom right
+            path.lineTo(icon_cx - 2, cy)     # Middle left
+            path.closeSubpath()
+            painter.drawPath(path) # Triangle
             
             painter.restore()
             
