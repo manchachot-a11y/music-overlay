@@ -4,6 +4,7 @@ import threading
 import time
 import websockets
 from websockets.exceptions import ConnectionClosed
+import pyautogui
 
 SPICETIFY_WS_PORT = 9001
 
@@ -253,8 +254,16 @@ class PlayerRouter:
                 controller.toggle_play()
             else:
                 #TODO: media keys fallback
+                pyautogui.press('playpause')
                 pass
+    
+    def next_track(self):
+        pyautogui.press('nexttrack')
 
+    def prev_track(self):
+        pyautogui.press('prevtrack')
+
+        
     @property
     def connected(self):
         controller = self._get_controller()

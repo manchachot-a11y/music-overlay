@@ -43,7 +43,7 @@ class LyricsThread(QThread):
             try:
                 response = requests.get(base_url, params=params, timeout=5)
                 
-                # If the user skipped the song during the network delay, loop back!
+                # if the user skipped the song during the network delay, loop back
                 if self.track != current_track:
                     continue
                     
