@@ -273,12 +273,14 @@ class MediaThread(QThread):
                                 if title_changed:
                                     if not is_first_boot:
                                         # Track skip, engage limbo lock to ignore stale ghost data
+                                        # Track skip, engage limbo lock to ignore stale ghost data
                                         expected_timeline_update_after = datetime.datetime.now(datetime.timezone.utc)
                                         last_seen_update_time = None
                                         internal_pos = 0.0
                                         self._pending_tick = 0.0
                                         self.position_signal.emit(0.0)
                                     else:
+                                        # Startup, bypass limbo and let the OS snap fire immediately
                                         # Startup, bypass limbo and let the OS snap fire immediately
                                         expected_timeline_update_after = None
                                         last_seen_update_time = None
@@ -314,6 +316,7 @@ class MediaThread(QThread):
                                     last_os_target = os_target
                                     last_os_target_time = datetime.datetime.now(datetime.timezone.utc)
 
+                            # Drain hardware ticks 
                             # Drain hardware ticks 
                             else:
                                 tick = self._pending_tick
@@ -510,6 +513,7 @@ class MusicOverlay(QWidget):
         self.lyrics_expanded = False
         self.hovering_lyrics_tab = False
         self.hovering_next = False
+        self.hovering_next = False
         self.base_height = 150
         self.expanded_lyrics_height = 400 
         
@@ -533,6 +537,16 @@ class MusicOverlay(QWidget):
         self.hover_anim = QVariantAnimation(self)
         self.hover_anim.setDuration(250)
         self.hover_anim.valueChanged.connect(self._update_hover_alpha)
+
+        self.prev_alpha = 0.0
+        self.prev_anim = QVariantAnimation(self)
+        self.prev_anim.setDuration(250)
+        self.prev_anim.valueChanged.connect(self._update_prev_alpha)
+
+        self.next_alpha = 0.0
+        self.next_anim = QVariantAnimation(self)
+        self.next_anim.setDuration(250)
+        self.next_anim.valueChanged.connect(self._update_next_alpha)
 
         self.prev_alpha = 0.0
         self.prev_anim = QVariantAnimation(self)
@@ -629,7 +643,15 @@ class MusicOverlay(QWidget):
 
     def _update_next_alpha(self, val):
         self.next_alpha = float(val)
+
+    def _update_prev_alpha(self, val):
+        self.prev_alpha = float(val)
         self.update()
+
+    def _update_next_alpha(self, val):
+        self.next_alpha = float(val)
+        self.update()
+    
     
 
     # lyrics opacity change
@@ -650,6 +672,7 @@ class MusicOverlay(QWidget):
                 self.lyrics_fade_anim.setStartValue(0.0)
                 self.lyrics_fade_anim.setEndValue(1.0)
                 self.lyrics_fade_anim.start()
+
 
     # context menu
     def contextMenuEvent(self, event):
@@ -1081,12 +1104,30 @@ class MusicOverlay(QWidget):
 
     def leaveEvent(self, event):
         # Reset lyrics tab hover
+        # Reset lyrics tab hover
         if getattr(self, 'hovering_lyrics_tab', False):
             self.hovering_lyrics_tab = False
             self.hover_anim.stop()
             self.hover_anim.setStartValue(float(getattr(self, 'hover_alpha', 0.0)))
             self.hover_anim.setEndValue(0.0)
             self.hover_anim.start()
+
+        # Reset NEXT hover
+        if getattr(self, 'hovering_next', False):
+            self.hovering_next = False
+            self.next_anim.stop()
+            self.next_anim.setStartValue(float(getattr(self, 'next_alpha', 0.0)))
+            self.next_anim.setEndValue(0.0)
+            self.next_anim.start()
+
+        # Reset PREV hover
+        if getattr(self, 'hovering_prev', False):
+            self.hovering_prev = False
+            self.prev_anim.stop()
+            self.prev_anim.setStartValue(float(getattr(self, 'prev_alpha', 0.0)))
+            self.prev_anim.setEndValue(0.0)
+            self.prev_anim.start()
+
 
         # Reset NEXT hover
         if getattr(self, 'hovering_next', False):
@@ -1122,6 +1163,19 @@ class MusicOverlay(QWidget):
                     self.auto_reverse_pending = False
                 event.accept()
                 return
+
+            pause_rect = QRect(self.width() - 90, 15, 70, 70)
+            if pause_rect.contains(event.pos()) and not self.is_minimized:
+                self.player.toggle_play()
+
+            prev_rect = QRect(0, 30, 30, int(self.height() - 55))
+            if prev_rect.contains(event.pos()) and not self.is_minimized:
+                self.player.prev_track()
+
+            next_rect = QRect(self.width() - 30, 30, 31, int(self.height() - 55))
+            if next_rect.contains(event.pos()) and not self.is_minimized:
+                self.player.next_track()
+
 
             pause_rect = QRect(self.width() - 90, 15, 70, 70)
             if pause_rect.contains(event.pos()) and not self.is_minimized:
@@ -1554,6 +1608,10 @@ class MusicOverlay(QWidget):
             if expand_progress > 0 and bar_height > 0:
                 painter.setBrush(ref_gradient)
                 painter.drawRect(20 + (i * bar_spacing), self.base_height - 20, 5, int(bar_height * 0.6))
+
+        painter.setBrush(QColor(255, 255, 255, 255))
+        #painter.drawRect(0, 30, 20, int(self.height() - 55))
+        #painter.drawRect(self.width() - 20, 30, 20, int(self.height() - 55))
 
         painter.setBrush(QColor(255, 255, 255, 255))
         #painter.drawRect(0, 30, 20, int(self.height() - 55))
