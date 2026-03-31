@@ -88,6 +88,8 @@ class JamController:
                     if response.get("error") == "room_not_found":
                         print(f"[Jam] Room {self.room_code} not found")
                         self.connected = False
+                        self.room_code = None
+                        self.is_host = False
                         if self.on_room_not_found:
                             self.on_room_not_found()
                         return  # dont reconnect

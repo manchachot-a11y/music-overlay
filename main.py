@@ -1,4 +1,4 @@
-#TODO: - No lyrics available on some songs, fixed on switch
+#TODO: - No lyrics available on some songs, fixed on refresh
 
 import sys
 import json
@@ -191,7 +191,7 @@ class MediaThread(QThread):
         super().__init__()
         self.running = True
         self.audio_is_silent = True
-        self._pending_tick = 0.0  # No lock — GIL is sufficient for a float
+        self._pending_tick = 0.0  # No lock GIL is sufficient for floats
         self._loop = None
         self.current_pos = 0.0
         self.is_playing = True
@@ -548,15 +548,14 @@ class MusicOverlay(QWidget):
         self.next_anim.setDuration(250)
         self.next_anim.valueChanged.connect(self._update_next_alpha)
 
-        self.prev_alpha = 0.0
-        self.prev_anim = QVariantAnimation(self)
-        self.prev_anim.setDuration(250)
-        self.prev_anim.valueChanged.connect(self._update_prev_alpha)
+        self.hovering_jam = False
+        self.jam_hover_alpha = 0.0
+        self.jam_hover_anim = QVariantAnimation(self)
+        self.jam_hover_anim.setDuration(200)
+        self.jam_hover_anim.valueChanged.connect(self._update_jam_hover_alpha)
 
-        self.next_alpha = 0.0
-        self.next_anim = QVariantAnimation(self)
-        self.next_anim.setDuration(250)
-        self.next_anim.valueChanged.connect(self._update_next_alpha)
+        self.jam_input_active = False
+        self.jam_input_text = ""
 
         self.lyrics_opacity = 1.0
         self.pending_lyrics = None
@@ -565,6 +564,19 @@ class MusicOverlay(QWidget):
         self.lyrics_fade_anim.setEasingCurve(QEasingCurve.Type.InOutQuad)
         self.lyrics_fade_anim.valueChanged.connect(self._update_lyrics_opacity)
         self.lyrics_fade_anim.finished.connect(self._on_lyrics_fade_finished)
+
+        self.pause_flash_alpha = 0.0
+        self.pause_flash_anim = QVariantAnimation(self)
+        self.pause_flash_anim.setDuration(900)
+        self.pause_flash_anim.setEasingCurve(QEasingCurve.Type.OutCubic)
+        self.pause_flash_anim.valueChanged.connect(self._update_pause_flash)
+        self.pause_flash_anim.finished.connect(lambda: setattr(self, 'pause_flash_alpha', 0.0))
+
+        self.hovering_album = False
+        self.album_hover_alpha = 0.0
+        self.album_hover_anim = QVariantAnimation(self)
+        self.album_hover_anim.setDuration(200)
+        self.album_hover_anim.valueChanged.connect(self._update_album_hover)
 
         self.audio_thread.audio_tick.connect(self.media_thread.on_audio_tick)
 
@@ -585,11 +597,19 @@ class MusicOverlay(QWidget):
         )
 
     def handle_room_not_found(self):
-        from PyQt6.QtWidgets import QMessageBox
-        # must run on main thread
-        QTimer.singleShot(0, lambda: QMessageBox.warning(
-            self, "Jam", "Room not found. Check the code and try again."
-        ))
+        QTimer.singleShot(0, self._show_jam_not_found)
+
+    def _show_jam_not_found(self):
+        self.jam_input_active = True
+        self.jam_input_text = ""
+        self._jam_input_error = True
+        self.update()
+        QTimer.singleShot(1500, self._clear_jam_input_error)
+
+    def _clear_jam_input_error(self):
+        self._jam_input_error = False
+        self.jam_input_active = False
+        self.update()
 
     def handle_jam_sync(self, position, at_utc, title, artist, is_playing):
         import time
@@ -610,11 +630,11 @@ class MusicOverlay(QWidget):
             print(f"[Jam] Track changed to: {title} by {artist}")
             self.player.play_song(title, artist, seek_to=target)
         elif abs(drift) > 0.5 and is_playing:
-            print(f"[Jam] Drift {drift:.2f}s — seeking to {target:.2f}")
+            print(f"[Jam] Drift {drift:.2f}s - seeking to {target:.2f}")
             self.player.seek(target)
 
     def handle_host_left(self):
-        print("[Jam] Host left — resuming local sync")
+        print("[Jam] Host left - resuming local sync")
         self.jam.disconnect()
         
     def handle_join_jam(self, room_code):
@@ -644,15 +664,17 @@ class MusicOverlay(QWidget):
     def _update_next_alpha(self, val):
         self.next_alpha = float(val)
 
-    def _update_prev_alpha(self, val):
-        self.prev_alpha = float(val)
+    def _update_jam_hover_alpha(self, val):
+        self.jam_hover_alpha = float(val)
+        self.update()
+    
+    def _update_pause_flash(self, val):
+        self.pause_flash_alpha = float(val)
         self.update()
 
-    def _update_next_alpha(self, val):
-        self.next_alpha = float(val)
+    def _update_album_hover(self, val):
+        self.album_hover_alpha = float(val)
         self.update()
-    
-    
 
     # lyrics opacity change
     def _update_lyrics_opacity(self, val):
@@ -1104,7 +1126,6 @@ class MusicOverlay(QWidget):
 
     def leaveEvent(self, event):
         # Reset lyrics tab hover
-        # Reset lyrics tab hover
         if getattr(self, 'hovering_lyrics_tab', False):
             self.hovering_lyrics_tab = False
             self.hover_anim.stop()
@@ -1128,24 +1149,53 @@ class MusicOverlay(QWidget):
             self.prev_anim.setEndValue(0.0)
             self.prev_anim.start()
 
+        # Reset JAM hover
+        if getattr(self, 'hovering_jam', False):
+            self.hovering_jam = False
+            self.jam_hover_anim.stop()
+            self.jam_hover_anim.setStartValue(float(self.jam_hover_alpha))
+            self.jam_hover_anim.setEndValue(0.0)
+            self.jam_hover_anim.start()
 
-        # Reset NEXT hover
-        if getattr(self, 'hovering_next', False):
-            self.hovering_next = False
-            self.next_anim.stop()
-            self.next_anim.setStartValue(float(getattr(self, 'next_alpha', 0.0)))
-            self.next_anim.setEndValue(0.0)
-            self.next_anim.start()
-
-        # Reset PREV hover
-        if getattr(self, 'hovering_prev', False):
-            self.hovering_prev = False
-            self.prev_anim.stop()
-            self.prev_anim.setStartValue(float(getattr(self, 'prev_alpha', 0.0)))
-            self.prev_anim.setEndValue(0.0)
-            self.prev_anim.start()
+        # album play/pause hover
+        if getattr(self, 'hovering_album', False):
+            self.hovering_album = False
+            self.album_hover_anim.stop()
+            self.album_hover_anim.setStartValue(float(self.album_hover_alpha))
+            self.album_hover_anim.setEndValue(0.0)
+            self.album_hover_anim.start()
 
         super().leaveEvent(event)
+
+    def keyPressEvent(self, event):
+        if not getattr(self, 'jam_input_active', False):
+            super().keyPressEvent(event)
+            return
+
+        key = event.key()
+
+        if key == Qt.Key.Key_Escape:
+            self.jam_input_active = False
+            self.jam_input_text = ""
+            self.update()
+
+        elif key == Qt.Key.Key_Backspace:
+            self.jam_input_text = self.jam_input_text[:-1]
+            self.update()
+
+        elif key == Qt.Key.Key_Return or key == Qt.Key.Key_Enter:
+            code = self.jam_input_text.strip().upper()
+            if len(code) >= 4:
+                self.jam_input_active = False
+                self.jam_input_text = ""
+                self.handle_join_jam(code)
+                self.update()
+
+        else:
+            char = event.text().upper()
+            if char and char.isalnum() and len(self.jam_input_text) < 6:
+                self.jam_input_text += char
+                self.update()
 
     def mousePressEvent(self, event):
         # primary mouse press
@@ -1167,6 +1217,10 @@ class MusicOverlay(QWidget):
             pause_rect = QRect(self.width() - 90, 15, 70, 70)
             if pause_rect.contains(event.pos()) and not self.is_minimized:
                 self.player.toggle_play()
+                self.pause_flash_anim.stop()
+                self.pause_flash_anim.setStartValue(1.0)
+                self.pause_flash_anim.setEndValue(0.0)
+                self.pause_flash_anim.start()
 
             prev_rect = QRect(0, 30, 30, int(self.height() - 55))
             if prev_rect.contains(event.pos()) and not self.is_minimized:
@@ -1176,18 +1230,59 @@ class MusicOverlay(QWidget):
             if next_rect.contains(event.pos()) and not self.is_minimized:
                 self.player.next_track()
 
+            if not self.is_minimized:
+                jam_active = getattr(self, 'jam', None) and self.jam.room_code
 
-            pause_rect = QRect(self.width() - 90, 15, 70, 70)
-            if pause_rect.contains(event.pos()) and not self.is_minimized:
-                self.player.toggle_play()
+                if jam_active:
+                    # leave button
+                    leave_rect = QRect(45 + 8 + len(self.jam.room_code) * 8, 7, 14, 14)
+                    if leave_rect.contains(event.pos()):
+                        self.jam.disconnect()
+                        self.jam_broadcast_timer.stop()
+                        self.jam.room_code = None
+                        self.jam.is_host = False
+                        print("[Jam] Left room")
+                        self.update()
+                        event.accept()
+                        return
 
-            prev_rect = QRect(0, 30, 30, int(self.height() - 55))
-            if prev_rect.contains(event.pos()) and not self.is_minimized:
-                self.player.prev_track()
+                    # copy room code
+                    code_rect = QRect(45, 5, len(self.jam.room_code) * 8 + 20, 22)
+                    if code_rect.contains(event.pos()):
+                        from PyQt6.QtWidgets import QApplication
+                        QApplication.clipboard().setText(self.jam.room_code)
+                        self.update()
+                        event.accept()
+                        return
 
-            next_rect = QRect(self.width() - 30, 30, 31, int(self.height() - 55))
-            if next_rect.contains(event.pos()) and not self.is_minimized:
-                self.player.next_track()
+                else:
+                    if self.jam_input_active:
+                        # clicking outside input cancels it
+                        input_rect = QRect(45, 5, 120, 22)
+                        if not input_rect.contains(event.pos()):
+                            self.jam_input_active = False
+                            self.jam_input_text = ""
+                            self.update()
+                    else:
+                        # host button
+                        host_rect = QRect(45, 5, 38, 20)
+                        if host_rect.contains(event.pos()) and self.jam_hover_alpha > 0.1:
+                            import random
+                            room_code = ''.join(random.choices('ABCDEFGHJKLMNPQRSTUVWXYZ23456789', k=5))
+                            self.jam.host(room_code)
+                            self.jam_broadcast_timer.start()
+                            self.update()
+                            event.accept()
+                            return
+
+                        # join button
+                        join_rect = QRect(87, 5, 32, 20)
+                        if join_rect.contains(event.pos()) and self.jam_hover_alpha > 0.1:
+                            self.jam_input_active = True
+                            self.jam_input_text = ""
+                            self.update()
+                            event.accept()
+                            return
 
             if self.auto_pop_timer.isActive():
                 self.auto_pop_timer.stop()
@@ -1239,6 +1334,24 @@ class MusicOverlay(QWidget):
             self.prev_anim.setStartValue(float(getattr(self, 'prev_alpha', 0.0)))
             self.prev_anim.setEndValue(1.0 if is_prev else 0.0) 
             self.prev_anim.start()
+
+        jam_hover_rect = QRect(45, 5, 120, 22)
+        is_jam_hover = jam_hover_rect.contains(event.pos())
+        if is_jam_hover != getattr(self, 'hovering_jam', False):
+            self.hovering_jam = is_jam_hover
+            self.jam_hover_anim.stop()
+            self.jam_hover_anim.setStartValue(float(self.jam_hover_alpha))
+            self.jam_hover_anim.setEndValue(1.0 if is_jam_hover else 0.0)
+            self.jam_hover_anim.start()
+
+        album_rect = QRect(self.width() - 90, 15, 60, 70)
+        is_album_hover = album_rect.contains(event.pos()) and not self.is_minimized
+        if is_album_hover != getattr(self, 'hovering_album', False):
+            self.hovering_album = is_album_hover
+            self.album_hover_anim.stop()
+            self.album_hover_anim.setStartValue(float(self.album_hover_alpha))
+            self.album_hover_anim.setEndValue(1.0 if is_album_hover else 0.0)
+            self.album_hover_anim.start()
 
         if event.buttons() == Qt.MouseButton.LeftButton:
             
@@ -1492,8 +1605,72 @@ class MusicOverlay(QWidget):
         painter.drawRoundedRect(self.rect().adjusted(1, 1, -1, -1), 15, 15)    
         
         ui_alpha = int(255 * self.content_opacity)
-        painter.setPen(QColor(150, 150, 150, int(180 * self.content_opacity)))
+        painter.setPen(QColor(255, 255, 255, int(60 * self.content_opacity)))
+        
         painter.drawLine(15, 15, 27, 15)
+
+        jam_active = getattr(self, 'jam', None) and self.jam.room_code
+        jam_font = QFont("Segoe UI", 8, QFont.Weight.Bold)
+        painter.setFont(jam_font)
+
+        if jam_active:
+            # colored dot
+            dot_color = self.current_color if self.jam.is_host else QColor(255, 255, 255)
+            dot_color.setAlpha(200)
+            painter.setBrush(dot_color)
+            painter.setPen(Qt.PenStyle.NoPen)
+            painter.drawEllipse(QRectF(47, 12, 6, 6))
+
+            # room code text
+            painter.setPen(QColor(255, 255, 255, 200))
+            painter.drawText(57, 19, self.jam.room_code)
+
+            # Leave x
+            code_w = QFontMetrics(jam_font).horizontalAdvance(self.jam.room_code)
+            painter.setPen(QColor(255, 255, 255, 120))
+            painter.drawText(59 + code_w, 19, "×") # uses a special '×' character so it's centered 
+
+        elif self.jam_input_active:
+            input_rect = QRectF(45, 5, 110, 20)
+            
+            # red tint on error
+            if getattr(self, '_jam_input_error', False):
+                painter.setBrush(QColor(255, 80, 80, 30))
+                painter.setPen(QColor(255, 80, 80, 120))
+                text_color = QColor(255, 80, 80, 200)
+                display_text = "Not found"
+            else:
+                painter.setBrush(QColor(255, 255, 255, 20))
+                painter.setPen(QColor(255, 255, 255, 60))
+                text_color = QColor(255, 255, 255, 200)
+                display_text = self.jam_input_text + "▏"
+
+            painter.drawRoundedRect(input_rect, 4, 4)
+            painter.setPen(text_color)
+            painter.drawText(50, 19, display_text)
+
+        else:
+            if self.jam_hover_alpha < 0.99:
+                base_opacity = 0.25 * (1.0 - self.jam_hover_alpha)
+                painter.setPen(QColor(255, 255, 255, int(255 * base_opacity)))
+                painter.drawText(47, 19, "♫")
+
+            if self.jam_hover_alpha > 0.01:
+                # host button
+                host_rect = QRectF(45, 5, 38, 18)
+                painter.setBrush(QColor(255, 255, 255, int(30 * self.jam_hover_alpha)))
+                painter.setPen(QColor(255, 255, 255, int(60 * self.jam_hover_alpha)))
+                painter.drawRoundedRect(host_rect, 4, 4)
+                painter.setPen(QColor(255, 255, 255, int(200 * self.jam_hover_alpha)))
+                painter.drawText(QRectF(45, 5, 38, 18), Qt.AlignmentFlag.AlignCenter, "Host")
+
+                # Join button
+                join_rect = QRectF(87, 5, 32, 18)
+                painter.setBrush(QColor(255, 255, 255, int(30 * self.jam_hover_alpha)))
+                painter.setPen(QColor(255, 255, 255, int(60 * self.jam_hover_alpha)))
+                painter.drawRoundedRect(join_rect, 4, 4)
+                painter.setPen(QColor(255, 255, 255, int(200 * self.jam_hover_alpha)))
+                painter.drawText(QRectF(87, 5, 32, 18), Qt.AlignmentFlag.AlignCenter, "Join")
 
         painter.save()
         
@@ -1552,12 +1729,81 @@ class MusicOverlay(QWidget):
         if not self.album_pixmap.isNull():
             cover_rect = QRectF(self.width() - 90, 15, 70, 70)
             path = QPainterPath()
-            path.addRoundedRect(cover_rect, 8, 8) 
+            path.addRoundedRect(cover_rect, 8, 8)
+            cx = self.width() - 90 + 35
+            cy = 15 + 35
+
+            path = QPainterPath()
+            path.addRoundedRect(cover_rect, 8, 8)
             painter.save()
             painter.setClipPath(path)
             painter.setOpacity(self.content_opacity)
             painter.drawPixmap(cover_rect.toRect(), self.album_pixmap)
             painter.restore()
+
+            # hover overlay
+            hover_a = getattr(self, 'album_hover_alpha', 0.0)
+            if hover_a > 0.0:
+                painter.save()
+                painter.setClipPath(path)
+                painter.setBrush(QColor(0, 0, 0, int(80 * hover_a)))
+                painter.setPen(Qt.PenStyle.NoPen)
+                painter.drawRoundedRect(cover_rect, 8, 8)
+
+                # pause or play depending on state
+                is_playing = getattr(self.media_thread, 'is_playing', True)
+                icon_alpha = int(220 * hover_a)
+                painter.setBrush(QColor(255, 255, 255, icon_alpha))
+                painter.setPen(Qt.PenStyle.NoPen)
+                icx = cx
+                icy = cy
+
+                if is_playing:
+                    painter.drawRect(QRectF(icx - 8, icy - 9, 5, 18))
+                    painter.drawRect(QRectF(icx + 3, icy - 9, 5, 18))
+                else:
+                    play_path = QPainterPath()
+                    play_path.moveTo(icx - 7, icy - 9)
+                    play_path.lineTo(icx - 7, icy + 9)
+                    play_path.lineTo(icx + 9, icy)
+                    play_path.closeSubpath()
+                    painter.drawPath(play_path)
+
+                painter.restore()
+
+            # click flash overlay
+            flash_a = getattr(self, 'pause_flash_alpha', 0.0)
+            if flash_a > 0.0:
+                painter.save()
+                
+                # icon shrinks slightly as it fades out
+                icon_scale = 0.85 + (0.15 * flash_a)  # 1.0 at start, 0.85 at end
+                is_playing = getattr(self.media_thread, 'is_playing', True)
+                icon_alpha = int(255 * flash_a)
+                
+                painter.setClipPath(path)
+                
+                # dark overlay fades out too
+                painter.setBrush(QColor(0, 0, 0, int(100 * flash_a)))
+                painter.setPen(Qt.PenStyle.NoPen)
+                painter.drawRoundedRect(cover_rect, 8, 8)
+                
+                painter.setBrush(QColor(255, 255, 255, icon_alpha))
+                icon_size = 9 * icon_scale
+                
+                if is_playing:
+                    painter.drawRect(QRectF(cx - icon_size, cy - icon_size, icon_size * 0.55, icon_size * 2))
+                    painter.drawRect(QRectF(cx + icon_size * 0.33, cy - icon_size, icon_size * 0.55, icon_size * 2))
+                else:
+                    play_path = QPainterPath()
+                    play_path.moveTo(cx - icon_size * 0.78, cy - icon_size)
+                    play_path.lineTo(cx - icon_size * 0.78, cy + icon_size)
+                    play_path.lineTo(cx + icon_size, cy)
+                    play_path.closeSubpath()
+                    painter.drawPath(play_path)
+                
+                painter.restore()
+
         else:
             painter.setBrush(QColor(50, 50, 50, int(255 * self.content_opacity)))
             painter.setPen(Qt.PenStyle.NoPen)
@@ -1596,7 +1842,7 @@ class MusicOverlay(QWidget):
         num_bars = max(1, (self.width() - 40) // bar_spacing)
         chunks = np.array_split(self.audio_data, num_bars)
         
-        # bar loop - collapse bands into visual bars, preserve transients
+        # collapse bands into visual bars, preserve transients
         for i, chunk in enumerate(chunks):
             val = np.max(chunk) if len(chunk) > 0 else 0
             bar_height = min(int(val), max_height) 
@@ -1608,14 +1854,6 @@ class MusicOverlay(QWidget):
             if expand_progress > 0 and bar_height > 0:
                 painter.setBrush(ref_gradient)
                 painter.drawRect(20 + (i * bar_spacing), self.base_height - 20, 5, int(bar_height * 0.6))
-
-        painter.setBrush(QColor(255, 255, 255, 255))
-        #painter.drawRect(0, 30, 20, int(self.height() - 55))
-        #painter.drawRect(self.width() - 20, 30, 20, int(self.height() - 55))
-
-        painter.setBrush(QColor(255, 255, 255, 255))
-        #painter.drawRect(0, 30, 20, int(self.height() - 55))
-        #painter.drawRect(self.width() - 20, 30, 20, int(self.height() - 55))
 
         if getattr(self, 'expanded_lyrics_height', 0) > self.base_height:
             diff = self.expanded_lyrics_height - self.base_height
@@ -1644,7 +1882,7 @@ class MusicOverlay(QWidget):
             max_dist_bottom = max(1.0, self.height() - center_y)
 
             for i, line in enumerate(self.current_lyrics):
-                # lyrics loop - center weighting for active line, fade edges to focus
+                # center weighting for active line, fade edges to focus
                 line_y = start_y + (i * line_spacing) - getattr(self, 'smooth_scroll_y', 0)
                 
                 if line_y < self.base_height - 10 or line_y > self.height() + 50:
@@ -1714,6 +1952,7 @@ class MusicOverlay(QWidget):
         if getattr(self, 'next_alpha', 0.0) > 0.0 and not self.is_minimized:
             painter.save()
             next_draw_rect = QRectF(self.width() - 20, 0, 20, self.height())
+            painter.setClipRect(next_draw_rect)
             cx = float(self.width())
             cy = next_draw_rect.height() / 2.0
             rx = 20.0
