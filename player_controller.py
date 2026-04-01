@@ -266,6 +266,7 @@ class PlayerRouter:
         
     @property
     def connected(self):
+        #return False
         controller = self._get_controller()
         return controller.connected if controller else False
 

@@ -76,9 +76,9 @@ class SpicetifyInstallThread(QThread):
             subprocess.run([spicetify_cmd, "config", "extensions", "music_overlay.js"], capture_output=True)
 
             self.progress.emit("Applying patch...")
-            subprocess.run([spicetify_cmd, "apply"], capture_output=True, text=True)
-            if result.returncode != 0:
-                self.finished.emit(False, result.stderr[:200])
+            apply_result = subprocess.run([spicetify_cmd, "apply"], capture_output=True, text=True)
+            if apply_result.returncode != 0:
+                self.finished.emit(False, apply_result.stderr[:200])
                 return
 
             self.finished.emit(True, "")

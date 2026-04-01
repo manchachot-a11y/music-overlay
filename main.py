@@ -273,14 +273,12 @@ class MediaThread(QThread):
                                 if title_changed:
                                     if not is_first_boot:
                                         # Track skip, engage limbo lock to ignore stale ghost data
-                                        # Track skip, engage limbo lock to ignore stale ghost data
                                         expected_timeline_update_after = datetime.datetime.now(datetime.timezone.utc)
                                         last_seen_update_time = None
                                         internal_pos = 0.0
                                         self._pending_tick = 0.0
                                         self.position_signal.emit(0.0)
                                     else:
-                                        # Startup, bypass limbo and let the OS snap fire immediately
                                         # Startup, bypass limbo and let the OS snap fire immediately
                                         expected_timeline_update_after = None
                                         last_seen_update_time = None
@@ -316,7 +314,6 @@ class MediaThread(QThread):
                                     last_os_target = os_target
                                     last_os_target_time = datetime.datetime.now(datetime.timezone.utc)
 
-                            # Drain hardware ticks 
                             # Drain hardware ticks 
                             else:
                                 tick = self._pending_tick
@@ -555,6 +552,22 @@ class MusicOverlay(QWidget):
         self.jam_hover_anim.setDuration(200)
         self.jam_hover_anim.valueChanged.connect(self._update_jam_hover_alpha)
 
+        self._setup_notice = None  # None, "spotify", "ytmusic", "spotify_installing", "spotify_done"
+        self._setup_notice_alpha = 0.0
+        self._setup_notice_anim = QVariantAnimation(self)
+        self._setup_notice_anim.setDuration(400)
+        self._setup_notice_anim.valueChanged.connect(self._update_setup_notice_alpha)
+        self._setup_dismissed = set() # tracks which notices have been dismissed
+
+        self._extension_check_timer = QTimer(self)
+        self._extension_check_timer.setInterval(2000)
+        self._extension_check_timer.timeout.connect(self._poll_extension_connected)
+        self._extension_check_timer.start()
+
+        self._notice_auto_dismiss_timer = QTimer(self)
+        self._notice_auto_dismiss_timer.setSingleShot(True)
+        self._notice_auto_dismiss_timer.timeout.connect(self._dismiss_setup_notice)
+
         self.jam_input_active = False
         self.jam_input_text = ""
 
@@ -599,6 +612,107 @@ class MusicOverlay(QWidget):
 
     def handle_room_not_found(self):
         QTimer.singleShot(0, self._show_jam_not_found)
+
+    def _check_extension_setup(self, app_id):
+        app = app_id.lower()
+        if not app:
+            return
+        
+        notice = getattr(self, '_setup_notice', None)
+        if notice in ("no_extension", "spotify_installing", "spotify_done"):
+            if self.player.spicetify.connected or self.player.ytmusic.connected:
+                self._dismiss_setup_notice()
+                return
+
+    def _show_setup_notice(self, notice_type):
+        if self._setup_notice == notice_type:
+            return  # already showing
+        self._setup_notice = notice_type
+        self._setup_notice_anim.stop()
+        self._setup_notice_anim.setStartValue(float(self._setup_notice_alpha))
+        self._setup_notice_anim.setEndValue(1.0)
+        self._setup_notice_anim.start()
+
+        if notice_type == "spotify":
+            from setup_wizard import SpicetifyInstallThread
+            self._spicetify_thread = SpicetifyInstallThread()
+            self._spicetify_thread.progress.connect(self._on_spicetify_progress)
+            self._spicetify_thread.finished.connect(self._on_spicetify_done)
+            self._spicetify_thread.start()
+            self._setup_notice = "spotify_installing"
+
+        if notice_type == "no_extension":
+            self._notice_auto_dismiss_timer.stop()
+            self._notice_auto_dismiss_timer.start(5000)
+
+    def _on_spicetify_progress(self, msg):
+        self._spicetify_status = msg
+        self.update()
+
+    def _on_spicetify_done(self, success, error):
+        print(f"[Spicetify Setup] success={success} error={error}")
+        if success:
+            self._setup_notice = "spotify_done"
+            self._spicetify_status = "Restart Spotify to finish"
+            self.update()
+            self._notice_auto_dismiss_timer.stop()
+            self._notice_auto_dismiss_timer.start(4000)
+        else:
+            self._setup_notice = "spotify_error"
+            self._spicetify_status = error[:40] if error else "Unknown error"
+            self.update()
+            self._notice_auto_dismiss_timer.stop()
+
+    def _dismiss_setup_notice(self):
+        self._notice_auto_dismiss_timer.stop()
+        notice = self._setup_notice
+        if not notice:
+            return
+        if notice not in ("no_extension",):
+            base = notice.replace("_installing", "").replace("_done", "").replace("_error", "")
+            self._setup_dismissed.add(base)
+        self._setup_notice_anim.stop()
+        self._setup_notice_anim.setStartValue(float(self._setup_notice_alpha))
+        self._setup_notice_anim.setEndValue(0.0)
+        try:
+            self._setup_notice_anim.finished.disconnect()
+        except TypeError:
+            pass
+        self._setup_notice_anim.finished.connect(lambda: setattr(self, '_setup_notice', None))
+        self._setup_notice_anim.start()
+
+    def _open_ytm_extension_guide(self):
+        from PyQt6.QtWidgets import QApplication
+        from ytmusic_extension import MANIFEST_JSON, CONTENT_JS
+        import os, subprocess
+
+        ext_dst = os.path.join(os.environ.get("APPDATA", ""), "music-overlay", "ytmusic-extension")
+        os.makedirs(ext_dst, exist_ok=True)
+        with open(os.path.join(ext_dst, "manifest.json"), "w") as f:
+            f.write(MANIFEST_JSON)
+        with open(os.path.join(ext_dst, "content.js"), "w") as f:
+            f.write(CONTENT_JS)
+
+        QApplication.clipboard().setText(ext_dst)
+
+        chrome_paths = [
+            r"C:\Program Files\Google\Chrome\Application\chrome.exe",
+            r"C:\Program Files (x86)\Google\Chrome\Application\chrome.exe",
+            os.path.join(os.environ.get("LOCALAPPDATA", ""), r"Google\Chrome\Application\chrome.exe"),
+        ]
+        chrome = next((p for p in chrome_paths if os.path.exists(p)), None)
+        if chrome:
+            subprocess.Popen([chrome, "--new-window"])
+        self._setup_dismissed.add("ytmusic")
+        self._dismiss_setup_notice()
+
+    def _poll_extension_connected(self):
+        notice = getattr(self, '_setup_notice', None)
+        if not notice:
+            return
+        if notice in ("no_extension", "spotify_installing", "spotify_done", "spotify_error"):
+            if self.player.spicetify.connected or self.player.ytmusic.connected:
+                self._dismiss_setup_notice()
 
     def _show_jam_not_found(self):
         self.jam_input_active = True
@@ -682,6 +796,10 @@ class MusicOverlay(QWidget):
         self.lyrics_opacity = float(val)
         self.update()
 
+    def _update_setup_notice_alpha(self, val):
+        self._setup_notice_alpha = float(val)
+        self.update()
+
     # swap lyrics after fade
     def _on_lyrics_fade_finished(self):
         if self.lyrics_fade_anim.endValue() == 0.0:
@@ -741,8 +859,6 @@ class MusicOverlay(QWidget):
             jam_join_action = context_menu.addAction("Join Jam")
         context_menu.addSeparator()
 
-        setup_action = context_menu.addAction("Re-run Setup")
-
         action = context_menu.exec(self.mapToGlobal(event.pos()))
 
         if action == whitelist_action:
@@ -795,11 +911,6 @@ class MusicOverlay(QWidget):
             self.jam.room_code = None
             self.jam.is_host = False
             print("[Jam] Left room")
-
-        elif action == setup_action:
-            from setup_wizard import SetupWizard
-            self._setup_wizard = SetupWizard()
-            self._setup_wizard.show()
 
     @pyqtSlot(bool)
     # playback state
@@ -961,6 +1072,7 @@ class MusicOverlay(QWidget):
     @pyqtSlot(str, str, bytes, str, float)
     def update_metadata(self, title, artist, image_bytes, app_id, duration):
         self.player.set_app_id(app_id)
+        self._check_extension_setup(app_id)
         # change thumbnail only if it arrived late (every time)
         if title == self.song_title and self.song_title != "Waiting for music...":
             if image_bytes: 
@@ -1233,6 +1345,30 @@ class MusicOverlay(QWidget):
             if next_rect.contains(event.pos()) and not self.is_minimized:
                 self.player.next_track()
 
+            if getattr(self, '_setup_notice', None) and not self.is_minimized:
+                notice_rect = QRect(20, self.base_height - 45, self.width() - 40, 30)
+                if notice_rect.contains(event.pos()):
+                    if self._setup_notice == "ytmusic":
+                        self._open_ytm_extension_guide()
+                    elif self._setup_notice in ("spotify_error",):
+                        # retry
+                        self._show_setup_notice("spotify")
+                    else:
+                        self._dismiss_setup_notice()
+                    event.accept()
+                    return
+                
+            if getattr(self, '_setup_notice', None) == "no_extension" and not self.is_minimized:
+                notice_rect = QRect(45, 8, 200, 16)
+                if notice_rect.contains(event.pos()):
+                    app = self.player._current_app_id
+                    if "spotify" in app and "chrome" not in app:
+                        self._show_setup_notice("spotify")
+                    else:
+                        self._open_ytm_extension_guide()
+                    event.accept()
+                    return
+
             if not self.is_minimized:
                 jam_active = getattr(self, 'jam', None) and self.jam.room_code
 
@@ -1270,6 +1406,16 @@ class MusicOverlay(QWidget):
                         # host button
                         host_rect = QRect(45, 5, 38, 20)
                         if host_rect.contains(event.pos()) and self.jam_hover_alpha > 0.1:
+                            if not self.player.connected:
+                                self._jam_input_active = False
+                                self._setup_notice = "no_extension"
+                                self._setup_notice_anim.stop()
+                                self._setup_notice_anim.setStartValue(float(self._setup_notice_alpha))
+                                self._setup_notice_anim.setEndValue(1.0)
+                                self._setup_notice_anim.start()
+                                self.update()
+                                event.accept()
+                                return
                             import random
                             room_code = ''.join(random.choices('ABCDEFGHJKLMNPQRSTUVWXYZ23456789', k=5))
                             self.jam.host(room_code)
@@ -1281,6 +1427,15 @@ class MusicOverlay(QWidget):
                         # join button
                         join_rect = QRect(87, 5, 32, 20)
                         if join_rect.contains(event.pos()) and self.jam_hover_alpha > 0.1:
+                            if not self.player.connected:
+                                self._setup_notice = "no_extension"
+                                self._setup_notice_anim.stop()
+                                self._setup_notice_anim.setStartValue(float(self._setup_notice_alpha))
+                                self._setup_notice_anim.setEndValue(1.0)
+                                self._setup_notice_anim.start()
+                                self.update()
+                                event.accept()
+                                return
                             self.jam_input_active = True
                             self.jam_input_text = ""
                             self.update()
@@ -1687,27 +1842,28 @@ class MusicOverlay(QWidget):
             painter.drawText(50, 19, display_text)
 
         else:
-            if self.jam_hover_alpha < 0.99:
-                base_opacity = 0.25 * (1.0 - self.jam_hover_alpha)
-                painter.setPen(QColor(255, 255, 255, int(255 * base_opacity)))
-                painter.drawText(47, 19, "♫")
+            if not getattr(self, '_setup_notice', None) or getattr(self, '_setup_notice_alpha', 0.0) < 0.01:
+                if self.jam_hover_alpha < 0.99:
+                    base_opacity = 0.25 * (1.0 - self.jam_hover_alpha)
+                    painter.setPen(QColor(255, 255, 255, int(255 * base_opacity)))
+                    painter.drawText(47, 19, "♫")
 
-            if self.jam_hover_alpha > 0.01:
-                # host button
-                host_rect = QRectF(45, 5, 38, 18)
-                painter.setBrush(QColor(255, 255, 255, int(30 * self.jam_hover_alpha)))
-                painter.setPen(QColor(255, 255, 255, int(60 * self.jam_hover_alpha)))
-                painter.drawRoundedRect(host_rect, 4, 4)
-                painter.setPen(QColor(255, 255, 255, int(200 * self.jam_hover_alpha)))
-                painter.drawText(QRectF(45, 5, 38, 18), Qt.AlignmentFlag.AlignCenter, "Host")
+                if self.jam_hover_alpha > 0.01:
+                    # host button
+                    host_rect = QRectF(45, 5, 38, 18)
+                    painter.setBrush(QColor(255, 255, 255, int(30 * self.jam_hover_alpha)))
+                    painter.setPen(QColor(255, 255, 255, int(60 * self.jam_hover_alpha)))
+                    painter.drawRoundedRect(host_rect, 4, 4)
+                    painter.setPen(QColor(255, 255, 255, int(200 * self.jam_hover_alpha)))
+                    painter.drawText(QRectF(45, 5, 38, 18), Qt.AlignmentFlag.AlignCenter, "Host")
 
-                # Join button
-                join_rect = QRectF(87, 5, 32, 18)
-                painter.setBrush(QColor(255, 255, 255, int(30 * self.jam_hover_alpha)))
-                painter.setPen(QColor(255, 255, 255, int(60 * self.jam_hover_alpha)))
-                painter.drawRoundedRect(join_rect, 4, 4)
-                painter.setPen(QColor(255, 255, 255, int(200 * self.jam_hover_alpha)))
-                painter.drawText(QRectF(87, 5, 32, 18), Qt.AlignmentFlag.AlignCenter, "Join")
+                    # join button
+                    join_rect = QRectF(87, 5, 32, 18)
+                    painter.setBrush(QColor(255, 255, 255, int(30 * self.jam_hover_alpha)))
+                    painter.setPen(QColor(255, 255, 255, int(60 * self.jam_hover_alpha)))
+                    painter.drawRoundedRect(join_rect, 4, 4)
+                    painter.setPen(QColor(255, 255, 255, int(200 * self.jam_hover_alpha)))
+                    painter.drawText(QRectF(87, 5, 32, 18), Qt.AlignmentFlag.AlignCenter, "Join")
 
         painter.save()
         
@@ -1853,6 +2009,35 @@ class MusicOverlay(QWidget):
             expand_progress = 0.0
             
         expand_progress = max(0.0, min(1.0, expand_progress))
+
+        notice = getattr(self, '_setup_notice', None)
+        notice_alpha = getattr(self, '_setup_notice_alpha', 0.0)
+        if notice and notice_alpha > 0.0:
+            notice_font = QFont("Segoe UI", 8)
+            painter.setFont(notice_font)
+
+            if notice == "no_extension":
+                app = self.player._current_app_id
+                if "spotify" in app and "chrome" not in app:
+                    msg = "Spicetify needed  •  click to install"
+                else:
+                    msg = "Extension needed  •  click to install"
+                painter.setPen(QColor(255, 200, 80, int(200 * notice_alpha)))
+                painter.drawText(45, 19, msg)
+
+            elif notice == "spotify_installing":
+                status = getattr(self, '_spicetify_status', 'Installing...')
+                painter.setPen(QColor(255, 255, 255, int(160 * notice_alpha)))
+                painter.drawText(45, 19, status)
+
+            elif notice == "spotify_done":
+                painter.setPen(QColor(100, 220, 100, int(200 * notice_alpha)))
+                painter.drawText(45, 19, "Restart Spotify to finish")
+
+            elif notice == "spotify_error":
+                status = getattr(self, '_spicetify_status', 'Failed')
+                painter.setPen(QColor(255, 100, 100, int(200 * notice_alpha)))
+                painter.drawText(45, 19, f"{status[:30]}  retry?")
 
         painter.restore()
 
@@ -2091,7 +2276,6 @@ class MusicOverlay(QWidget):
 # entry
 if __name__ == "__main__":
     app = QApplication(sys.argv)
-    run_setup_if_needed()
     window = MusicOverlay()
     window.show()
     sys.exit(app.exec())
