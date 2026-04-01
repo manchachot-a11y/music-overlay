@@ -41,7 +41,7 @@ class LyricsThread(QThread):
             params = {"track_name": current_track, "artist_name": current_artist}
             
             try:
-                response = requests.get(base_url, params=params, timeout=5)
+                response = requests.get(base_url, params=params, timeout=10)
                 
                 # if the user skipped the song during the network delay, loop back
                 if self.track != current_track:

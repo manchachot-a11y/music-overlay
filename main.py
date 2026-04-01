@@ -508,6 +508,7 @@ class MusicOverlay(QWidget):
 
         self.media_thread.position_signal.connect(self.update_playback_position)
         self.current_lyric_index = 0
+        self._lyric_offsets = []
 
         self.setMouseTracking(True) 
         self.lyrics_expanded = False
@@ -686,6 +687,7 @@ class MusicOverlay(QWidget):
         if self.lyrics_fade_anim.endValue() == 0.0:
             if getattr(self, 'pending_lyrics', None) is not None:
                 self.current_lyrics, self.current_lrc_id = self.pending_lyrics
+                self._recalculate_lyric_offsets()
                 self.pending_lyrics = None
                 self.current_lyric_index = 0
                 self.smooth_scroll_y = 0.0
@@ -980,6 +982,7 @@ class MusicOverlay(QWidget):
             
         # fade out old lyrics on track change
         if getattr(self, 'current_lyrics', None):
+            self._recalculate_lyric_offsets()
             self.lyrics_fade_anim.stop()
             self.lyrics_fade_anim.setStartValue(float(self.lyrics_opacity))
             self.lyrics_fade_anim.setEndValue(0.0)
@@ -1561,15 +1564,49 @@ class MusicOverlay(QWidget):
     # scroll to active lyric
     def animate_lyric_scroll(self):
         active_index = max(-1, self.current_lyric_index - 1)
-        
+        lyric_font = QFont("Segoe UI", 12, QFont.Weight.Bold)
+        fm = QFontMetrics(lyric_font)
+        text_width = self.width() - 40
+        line_spacing = 50.0
+
+        cumulative_offset = 0.0
+        extra_at_active = 0.0
+        for i, line in enumerate(self.current_lyrics):
+            if i == active_index:
+                extra_at_active = self._lyric_offsets[active_index] if active_index >= 0 and active_index < len(self._lyric_offsets) else 0.0
+                break
+            bounding = fm.boundingRect(0, 0, int(text_width), 10000,
+                int(Qt.TextFlag.TextWordWrap | Qt.AlignmentFlag.AlignHCenter),
+                line.content)
+            num_lines = max(1, bounding.height() // fm.lineSpacing())
+            if num_lines >= 3:
+                cumulative_offset += 20.0
+
         offset = min(15.0 + (active_index * 0), 40.0)
-        target_y = 20.0 + (active_index * 50.0) - offset
+        target_y = 20.0 + (active_index * line_spacing) + extra_at_active - offset
         target_y = max(0.0, target_y)
-        
+
         self.lyric_scroll_anim.stop()
         self.lyric_scroll_anim.setStartValue(getattr(self, 'smooth_scroll_y', 0.0))
         self.lyric_scroll_anim.setEndValue(float(target_y))
         self.lyric_scroll_anim.start()
+
+    def _recalculate_lyric_offsets(self):
+        lyric_font = QFont("Segoe UI", 12, QFont.Weight.Bold)
+        fm = QFontMetrics(lyric_font)
+        text_width = self.width() - 40
+
+        offsets = []
+        cumulative = 0.0
+        for line in self.current_lyrics:
+            offsets.append(cumulative)
+            bounding = fm.boundingRect(0, 0, int(text_width), 10000,
+                int(Qt.TextFlag.TextWordWrap | Qt.AlignmentFlag.AlignHCenter),
+                line.content)
+            num_lines = max(1, bounding.height() // fm.lineSpacing())
+            if num_lines >= 3:
+                cumulative += 20.0
+        self._lyric_offsets = offsets
 
     # lyric scroll update
     def update_lyric_scroll(self, val):
@@ -1872,18 +1909,24 @@ class MusicOverlay(QWidget):
             
             lyric_font = QFont("Segoe UI", 12, QFont.Weight.Bold)
             painter.setFont(lyric_font)
-            line_spacing = 50.0 
+            line_spacing = 50.0
+
+            fm = QFontMetrics(lyric_font)
+            line_offsets = getattr(self, '_lyric_offsets', [])
+            if not line_offsets:
+                line_offsets = [0.0] * len(self.current_lyrics)
 
             active_index = max(-1, self.current_lyric_index - 1)
-            
-            center_y = start_y + (active_index * line_spacing) - getattr(self, 'smooth_scroll_y', 0)
-            
+
+            active_offset = line_offsets[active_index] if active_index >= 0 and active_index < len(line_offsets) else 0.0
+            center_y = start_y + (active_index * line_spacing) + active_offset - getattr(self, 'smooth_scroll_y', 0)
+
             max_dist_top = max(1.0, center_y - self.base_height)
             max_dist_bottom = max(1.0, self.height() - center_y)
 
             for i, line in enumerate(self.current_lyrics):
                 # center weighting for active line, fade edges to focus
-                line_y = start_y + (i * line_spacing) - getattr(self, 'smooth_scroll_y', 0)
+                line_y = start_y + (i * line_spacing) + line_offsets[i] - getattr(self, 'smooth_scroll_y', 0)
                 
                 if line_y < self.base_height - 10 or line_y > self.height() + 50:
                     continue
@@ -1903,7 +1946,13 @@ class MusicOverlay(QWidget):
                     color = QColor(255, 255, 255, int(160 * final_alpha_mult))
 
                 painter.setPen(color)
-                text_rect = QRectF(20, line_y - 20, self.width() - 40, 60)
+                bounding = fm.boundingRect(0, 0, int(self.width() - 40), 10000,
+                    int(Qt.TextFlag.TextWordWrap | Qt.AlignmentFlag.AlignHCenter),
+                    line.content)
+                num_lines = max(1, bounding.height() // fm.lineSpacing())
+                extra_top = 3.0 if num_lines >= 3 else 0.0
+
+                text_rect = QRectF(20, line_y - 20 + extra_top, self.width() - 40, 60 + extra_top)
                 if self.current_lrc_id != None:
                     painter.drawText(text_rect, Qt.AlignmentFlag.AlignCenter | Qt.TextFlag.TextWordWrap, line.content)
                 else:
