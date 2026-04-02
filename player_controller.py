@@ -68,9 +68,14 @@ class SpicetifyController:
 
     async def _serve(self):
         print(f"[Spicetify] listening on ws://localhost:{SPICETIFY_WS_PORT}")
-        async with websockets.serve(self._handle_extension, "localhost", SPICETIFY_WS_PORT):
+        try:
+            async with websockets.serve(self._handle_extension, "localhost", SPICETIFY_WS_PORT):
+                while self._running:
+                    await asyncio.sleep(0.1)
+        except OSError:
+            print(f"[Spicetify] Port {SPICETIFY_WS_PORT} in use. Extension server disabled for this instance.")
             while self._running:
-                await asyncio.sleep(0.1)
+                await asyncio.sleep(1)
 
     async def _handle_extension(self, ws):
         self._ws = ws
@@ -173,9 +178,14 @@ class YTMusicController:
 
     async def _serve(self):
         print(f"[YTMusic] Listening on ws://localhost:9002")
-        async with websockets.serve(self._handle_extension, "localhost", 9002):
+        try:
+            async with websockets.serve(self._handle_extension, "localhost", 9002):
+                while self._running:
+                    await asyncio.sleep(0.1)
+        except OSError:
+            print("[YTMusic] Port 9002 in use. Extension server disabled for this instance.")
             while self._running:
-                await asyncio.sleep(0.1)
+                await asyncio.sleep(1)
 
     async def _handle_extension(self, ws):
         self._ws = ws
@@ -252,11 +262,10 @@ class PlayerRouter:
         if controller:
             if hasattr(controller, 'toggle_play'):
                 controller.toggle_play()
-            else:
-                #TODO: media keys fallback
-                pyautogui.press('playpause')
-                pass
-    
+                print("TOGGLE PLAY W/ EXTENSION")
+        else:
+            pyautogui.press('playpause')
+
     def next_track(self):
         pyautogui.press('nexttrack')
 
@@ -271,15 +280,18 @@ class PlayerRouter:
         return controller.connected if controller else False
 
     def _get_controller(self):
+        target = None
         if "spotify" in self._current_app_id and "chrome" not in self._current_app_id and "msedge" not in self._current_app_id:
-            return self.spicetify
+            target = self.spicetify
         elif "chrome" in self._current_app_id or "msedge" in self._current_app_id:
-            return self.ytmusic
-        
+            target = self.ytmusic
+        if target and target.connected:
+            return target
         if self.ytmusic.connected:
             return self.ytmusic
         if self.spicetify.connected:
             return self.spicetify
+            
         return None
     
 
