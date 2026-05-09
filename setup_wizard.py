@@ -8,6 +8,7 @@ from PyQt6.QtCore import Qt, QThread, pyqtSignal, QTimer, QPropertyAnimation, QE
 from PyQt6.QtGui import QPainter, QColor, QLinearGradient, QFont, QPainterPath, QPen
 
 CONFIG_FILE = "ui_config.json"
+CREATE_NO_WINDOW = 0x08000000 if sys.platform == "win32" else 0 # no terminal window popup
 
 
 def get_asset_path(relative):
@@ -54,14 +55,20 @@ class SpicetifyInstallThread(QThread):
                 result = subprocess.run(
                     ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command",
                      "iwr -useb https://raw.githubusercontent.com/spicetify/spicetify-cli/master/install.ps1 | iex"],
-                    capture_output=True, text=True
+                    capture_output=True, 
+                    text=True,
+                    creationflags=CREATE_NO_WINDOW
                 )
                 if result.returncode != 0:
                     self.finished.emit(False, result.stderr[:200])
                     return
 
-            # Re-check after install
-            spicetify_cmd = spicetify_exe if os.path.exists(spicetify_exe) else "spicetify"
+            # hardcode expected path
+            spicetify_cmd = spicetify_exe if os.path.exists(spicetify_exe) else shutil.which("spicetify")
+            
+            if not spicetify_cmd:
+                self.finished.emit(False, "Could not locate Spicetify after installation.")
+                return
 
             self.progress.emit("Installing extension...")
             ext_dir = os.path.join(local, "spicetify", "Extensions")
@@ -72,11 +79,18 @@ class SpicetifyInstallThread(QThread):
                 f.write(SPICETIFY_EXTENSION_JS)
 
             self.progress.emit("Enabling extension...")
-            subprocess.run([spicetify_cmd, "config", "extensions", "music_overlay.js-"], capture_output=True)
-            subprocess.run([spicetify_cmd, "config", "extensions", "music_overlay.js"], capture_output=True)
+            subprocess.run([spicetify_cmd, "config", "extensions", "music_overlay.js"], 
+                           capture_output=True, creationflags=CREATE_NO_WINDOW)
+
+            self.progress.emit("Preparing Spotify...")
+            # force close spotify
+            subprocess.run(["taskkill", "/F", "/IM", "Spotify.exe"], 
+                           capture_output=True, creationflags=CREATE_NO_WINDOW)
 
             self.progress.emit("Applying patch...")
-            apply_result = subprocess.run([spicetify_cmd, "apply"], capture_output=True, text=True)
+            apply_result = subprocess.run([spicetify_cmd, "apply"], 
+                                          capture_output=True, text=True, creationflags=CREATE_NO_WINDOW)
+            
             if apply_result.returncode != 0:
                 self.finished.emit(False, apply_result.stderr[:200])
                 return

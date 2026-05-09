@@ -41,7 +41,8 @@ class LyricsThread(QThread):
             params = {"track_name": current_track, "artist_name": current_artist}
             
             try:
-                response = requests.get(base_url, params=params, timeout=10)
+                self._emit_fetching()
+                response = requests.get(base_url, params=params)#, timeout=10)
                 
                 # if the user skipped the song during the network delay, loop back
                 if self.track != current_track:
@@ -92,6 +93,9 @@ class LyricsThread(QThread):
         self.current_result_idx = (self.current_result_idx + direction) % len(self.cached_results)
         print(f"Lyrics: Switched to version {self.current_result_idx + 1} of {len(self.cached_results)}")
         self._emit_current()
+
+    def _emit_fetching(self):
+        self.lyrics_loaded.emit([LyricLine(0.0, "Fetching Lyrics...")], None)
 
     def _emit_current(self):
         result = self.cached_results[self.current_result_idx]

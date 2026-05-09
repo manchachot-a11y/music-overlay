@@ -9,7 +9,7 @@ import threading
 from collections import deque
 from PyQt6.QtWidgets import QApplication, QWidget, QSizeGrip, QMenu
 from PyQt6.QtGui import QPainter, QColor, QFont, QPixmap, QLinearGradient, QPainterPath, QPen, QBrush, QFontMetrics, QRadialGradient, QTransform
-from PyQt6.QtCore import Qt, QThread, pyqtSignal, pyqtSlot, QRect, QRectF, QVariantAnimation, QTimer, QAbstractAnimation, QEasingCurve
+from PyQt6.QtCore import Qt, QThread, pyqtSignal, pyqtSlot, QRect, QRectF, QVariantAnimation, QTimer, QAbstractAnimation, QEasingCurve, QTimeLine
 # imports
 from lyrics_engine import LyricsThread
 from jam_controller import JamController
@@ -81,7 +81,7 @@ class AudioThread(QThread):
         self.running = True
         self.rolling_peak = 2.0
         self.decay_rate = 0.95
-        self.eq_curve = np.linspace(1, 1, 150)
+        self.eq_curve = np.geomspace(1, 5, 150)
         self.silence_frames = 0
         self.window = np.hanning(1024)
 
@@ -546,6 +546,18 @@ class MusicOverlay(QWidget):
         self.next_anim.setDuration(250)
         self.next_anim.valueChanged.connect(self._update_next_alpha)
 
+        self.load_alpha_anim = QVariantAnimation(self)
+        self.load_alpha_anim.setDuration(4000)
+        self.load_alpha_anim.setEasingCurve(QEasingCurve.Type.InOutSine)
+        self.load_alpha_anim.setStartValue(50)
+
+        self.load_alpha_anim.setKeyValueAt(0.6, 255) 
+
+        self.load_alpha_anim.setEndValue(50)
+        self.load_alpha_anim.setLoopCount(-1) 
+        self.load_alpha_anim.valueChanged.connect(self.update)
+        self.load_alpha_anim.start()
+
         self.hovering_jam = False
         self.jam_hover_alpha = 0.0
         self.jam_hover_anim = QVariantAnimation(self)
@@ -778,6 +790,7 @@ class MusicOverlay(QWidget):
 
     def _update_next_alpha(self, val):
         self.next_alpha = float(val)
+        self.update()
 
     def _update_jam_hover_alpha(self, val):
         self.jam_hover_alpha = float(val)
@@ -1789,7 +1802,7 @@ class MusicOverlay(QWidget):
         r_hint, g_hint, b_hint = int(c.red() * 0.15), int(c.green() * 0.15), int(c.blue() * 0.15)
         
         glass_grad = QLinearGradient(0, 0, 0, self.height())
-        glass_grad.setColorAt(0.0, QColor(25+r_hint+pulse_top, 25+g_hint+pulse_top, 30+b_hint+pulse_top, base_alpha+pulse_top)) 
+        glass_grad.setColorAt(0.0, QColor(65+r_hint+int(r_hint*pulse_top/30), 65+g_hint+int(g_hint*pulse_top/30), 70+b_hint+int(b_hint*pulse_top/30), base_alpha-20+pulse_top)) 
         glass_grad.setColorAt(1.0, QColor(5+r_hint+pulse_bottom, 5+g_hint+pulse_bottom, 10+b_hint+pulse_bottom, base_alpha+10+pulse_bottom))
 
         painter.setBrush(glass_grad)
@@ -2125,7 +2138,10 @@ class MusicOverlay(QWidget):
                 pos_alpha = pos_alpha ** 1.5 
                 final_alpha_mult = pos_alpha * expand_progress * getattr(self, 'lyrics_opacity', 1.0)
                 
-                if i == active_index:
+
+                if line.content == "Fetching Lyrics...":
+                    color = QColor(255, 255, 255, self.load_alpha_anim.currentValue())
+                elif i == active_index:
                     color = QColor(255, 255, 255, int(255 * final_alpha_mult))
                 else:
                     color = QColor(255, 255, 255, int(160 * final_alpha_mult))
