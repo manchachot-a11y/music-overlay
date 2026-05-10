@@ -45,61 +45,103 @@ class SpicetifyInstallThread(QThread):
 
     def run(self):
         try:
-            self.progress.emit("Checking for Spicetify...")
+            def log_step(msg):
+                print(f"[DEBUG: Spicetify] {msg}")
+                self.progress.emit(msg)
 
+            log_step("verbose install...")
             local = os.environ.get("LOCALAPPDATA", "")
             spicetify_exe = os.path.join(local, "spicetify", "spicetify.exe")
 
             if not os.path.exists(spicetify_exe) and not shutil.which("spicetify"):
-                self.progress.emit("Installing Spicetify...")
-                result = subprocess.run(
-                    ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command",
-                     "iwr -useb https://raw.githubusercontent.com/spicetify/spicetify-cli/master/install.ps1 | iex"],
-                    capture_output=True, 
+                log_step("CLI not found. Downloading via PowerShell...")
+                
+                ps_command = (
+                    "iwr -useb https://raw.githubusercontent.com/spicetify/spicetify-cli/master/install.ps1 | iex; "
+                    "if ($LASTEXITCODE -ne 0) { throw 'PS Install Failed' }"
+                )
+                
+                process = subprocess.Popen(
+                    ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", ps_command],
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
                     text=True,
                     creationflags=CREATE_NO_WINDOW
                 )
-                if result.returncode != 0:
-                    self.finished.emit(False, result.stderr[:200])
+                
+                stdout, stderr = process.communicate()
+                print(f"[POWERSHELL STDOUT]:\n{stdout}")
+                if process.returncode != 0:
+                    print(f"[POWERSHELL ERROR]:\n{stderr}")
+                    self.finished.emit(False, f"PS Error: {stderr[:100]}")
                     return
 
-            # hardcode expected path
             spicetify_cmd = spicetify_exe if os.path.exists(spicetify_exe) else shutil.which("spicetify")
-            
-            if not spicetify_cmd:
-                self.finished.emit(False, "Could not locate Spicetify after installation.")
-                return
+            log_step(f"Using binary: {spicetify_cmd}")
 
-            self.progress.emit("Installing extension...")
+            log_step("Writing JS extension file...")
             ext_dir = os.path.join(local, "spicetify", "Extensions")
             os.makedirs(ext_dir, exist_ok=True)
-
+            
             from spicetify_extension import SPICETIFY_EXTENSION_JS
             with open(os.path.join(ext_dir, "music_overlay.js"), "w") as f:
                 f.write(SPICETIFY_EXTENSION_JS)
 
-            self.progress.emit("Enabling extension...")
-            subprocess.run([spicetify_cmd, "config", "extensions", "music_overlay.js"], 
-                           capture_output=True, creationflags=CREATE_NO_WINDOW)
+            log_step("Checking for Spicetify CLI updates...")
+            upgrade_proc = subprocess.Popen(
+                [spicetify_cmd, "upgrade"],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                creationflags=CREATE_NO_WINDOW
+            )
+            out, err = upgrade_proc.communicate()
+            print(f"[Upgrade Output]: {out}")
+            
+            # adblocker stuff
+            adblock_url = "https://raw.githubusercontent.com/rxri/spicetify-extensions/main/adblock/adblock.js"
+            adblock_path = os.path.join(ext_dir, "adblock.js")
 
-            self.progress.emit("Preparing Spotify...")
-            # force close spotify
+            log_step("Downloading adblockify...")
+            subprocess.run(["powershell", "-Command", f"Invoke-WebRequest -UseBasicParsing '{adblock_url}' -OutFile '{adblock_path}'"], creationflags=CREATE_NO_WINDOW)
+
+            commands = [
+                (["restore"], "Cleaning up old patch"),
+                (["config", "extensions", "music_overlay.js", "adblock.js"], "Registering extensions"),
+                (["backup", "apply"], "Applying fresh patch")
+            ]
+
+            log_step("Killing Spotify process...")
             subprocess.run(["taskkill", "/F", "/IM", "Spotify.exe"], 
                            capture_output=True, creationflags=CREATE_NO_WINDOW)
 
-            self.progress.emit("Applying patch...")
-            apply_result = subprocess.run([spicetify_cmd, "apply"], 
-                                          capture_output=True, text=True, creationflags=CREATE_NO_WINDOW)
-            
-            if apply_result.returncode != 0:
-                self.finished.emit(False, apply_result.stderr[:200])
-                return
+            for cmd_args, desc in commands:
+                log_step(f"Action: {desc}...")
+                proc = subprocess.Popen(
+                    [spicetify_cmd] + cmd_args,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    text=True,
+                    creationflags=CREATE_NO_WINDOW
+                )
+                out, err = proc.communicate()
+                
+                print(f"{desc} Output")
+                print(out)
+                if proc.returncode != 0:
+                    print(f"{desc} ERROR")
+                    print(err)
+                    self.finished.emit(False, f"{desc} failed: {err[:100]}")
+                    return
 
+            log_step("all steps completed successfully.")
             self.finished.emit(True, "")
 
         except Exception as e:
+            import traceback
+            print("[CRITICAL INSTALL ERROR]")
+            traceback.print_exc()
             self.finished.emit(False, str(e))
-
 
 class GlassWidget(QWidget):
 

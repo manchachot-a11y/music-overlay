@@ -1,4 +1,4 @@
-#TODO: - No lyrics available on some songs, fixed on refresh
+#TODO Fix Spicetify and YTM Install 
 
 import sys
 import json
@@ -637,9 +637,8 @@ class MusicOverlay(QWidget):
                 return
 
     def _show_setup_notice(self, notice_type):
-        if self._setup_notice == notice_type:
-            return  # already showing
         self._setup_notice = notice_type
+        
         self._setup_notice_anim.stop()
         self._setup_notice_anim.setStartValue(float(self._setup_notice_alpha))
         self._setup_notice_anim.setEndValue(1.0)
@@ -654,8 +653,7 @@ class MusicOverlay(QWidget):
             self._setup_notice = "spotify_installing"
 
         if notice_type == "no_extension":
-            self._notice_auto_dismiss_timer.stop()
-            self._notice_auto_dismiss_timer.start(5000)
+            self._notice_auto_dismiss_timer.start(4000)
 
     def _on_spicetify_progress(self, msg):
         self._spicetify_status = msg
@@ -676,21 +674,41 @@ class MusicOverlay(QWidget):
             self._notice_auto_dismiss_timer.stop()
 
     def _dismiss_setup_notice(self):
+        try:
+            local_mouse = self.mapFromGlobal(self.cursor().pos())
+            notice = getattr(self, '_setup_notice', None)
+            if notice:
+                if notice == "no_extension":
+                    notice_rect = QRect(45, 8, 200, 16)
+                else:
+                    notice_rect = QRect(20, self.base_height - 45, self.width() - 40, 30)
+                
+                if notice_rect.contains(local_mouse):
+                    self._hovering_notice = True
+                    return
+        except Exception:
+            pass
         self._notice_auto_dismiss_timer.stop()
         notice = self._setup_notice
         if not notice:
             return
+            
         if notice not in ("no_extension",):
             base = notice.replace("_installing", "").replace("_done", "").replace("_error", "")
             self._setup_dismissed.add(base)
+            
         self._setup_notice_anim.stop()
         self._setup_notice_anim.setStartValue(float(self._setup_notice_alpha))
         self._setup_notice_anim.setEndValue(0.0)
+        
         try:
             self._setup_notice_anim.finished.disconnect()
         except TypeError:
             pass
-        self._setup_notice_anim.finished.connect(lambda: setattr(self, '_setup_notice', None))
+            
+        self._setup_notice_anim.finished.connect(
+            lambda: setattr(self, '_setup_notice', None) if self._setup_notice_anim.endValue() == 0.0 else None
+        )
         self._setup_notice_anim.start()
 
     def _open_ytm_extension_guide(self):
@@ -1293,6 +1311,12 @@ class MusicOverlay(QWidget):
             self.album_hover_anim.setEndValue(0.0)
             self.album_hover_anim.start()
 
+        if getattr(self, '_hovering_notice', False):
+            self._hovering_notice = False
+            notice = getattr(self, '_setup_notice', None)
+            if notice and notice not in ("spotify_installing", "spotify_error"):
+                self._notice_auto_dismiss_timer.start(100)
+
         super().leaveEvent(event)
 
     def keyPressEvent(self, event):
@@ -1420,12 +1444,7 @@ class MusicOverlay(QWidget):
                         host_rect = QRect(45, 5, 38, 20)
                         if host_rect.contains(event.pos()) and self.jam_hover_alpha > 0.1:
                             if not self.player.connected:
-                                self._jam_input_active = False
-                                self._setup_notice = "no_extension"
-                                self._setup_notice_anim.stop()
-                                self._setup_notice_anim.setStartValue(float(self._setup_notice_alpha))
-                                self._setup_notice_anim.setEndValue(1.0)
-                                self._setup_notice_anim.start()
+                                self._show_setup_notice("no_extension")
                                 self.update()
                                 event.accept()
                                 return
@@ -1441,11 +1460,7 @@ class MusicOverlay(QWidget):
                         join_rect = QRect(87, 5, 32, 20)
                         if join_rect.contains(event.pos()) and self.jam_hover_alpha > 0.1:
                             if not self.player.connected:
-                                self._setup_notice = "no_extension"
-                                self._setup_notice_anim.stop()
-                                self._setup_notice_anim.setStartValue(float(self._setup_notice_alpha))
-                                self._setup_notice_anim.setEndValue(1.0)
-                                self._setup_notice_anim.start()
+                                self._show_setup_notice("no_extension")
                                 self.update()
                                 event.accept()
                                 return
@@ -1523,6 +1538,31 @@ class MusicOverlay(QWidget):
             self.album_hover_anim.setStartValue(float(self.album_hover_alpha))
             self.album_hover_anim.setEndValue(1.0 if is_album_hover else 0.0)
             self.album_hover_anim.start()
+
+        if getattr(self, '_setup_notice', None):
+            if self._setup_notice == "no_extension":
+                notice_rect = QRect(45, 8, 200, 16)
+            else:
+                notice_rect = QRect(20, getattr(self, 'base_height', 150) - 45, self.width() - 40, 30)
+                
+            is_notice_hover = notice_rect.contains(event.pos())
+            
+            if is_notice_hover != getattr(self, '_hovering_notice', False):
+                self._hovering_notice = is_notice_hover
+                if is_notice_hover:
+                    if self._notice_auto_dismiss_timer.isActive():
+                        self._notice_auto_dismiss_timer.stop()
+                        
+                    anim = self._setup_notice_anim
+                    from PyQt6.QtCore import QAbstractAnimation
+                    if anim.state() == QAbstractAnimation.State.Running and anim.endValue() == 0.0:
+                        anim.stop()
+                        anim.setStartValue(float(self._setup_notice_alpha))
+                        anim.setEndValue(1.0)
+                        anim.start()
+                else:
+                    if self._setup_notice not in ("spotify_installing", "spotify_error"):
+                        self._notice_auto_dismiss_timer.start(100)
 
         if event.buttons() == Qt.MouseButton.LeftButton:
             
