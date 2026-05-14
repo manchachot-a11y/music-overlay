@@ -2180,7 +2180,7 @@ class MusicOverlay(QWidget):
                 
 
                 if line.content == "Fetching Lyrics...":
-                    color = QColor(255, 255, 255, self.load_alpha_anim.currentValue())
+                    color = QColor(255, 255, 255, int(self.load_alpha_anim.currentValue() * final_alpha_mult))
                 elif i == active_index:
                     color = QColor(255, 255, 255, int(255 * final_alpha_mult))
                 else:
