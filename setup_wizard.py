@@ -107,7 +107,8 @@ class SpicetifyInstallThread(QThread):
 
             commands = [
                 (["restore"], "Cleaning up old patch"),
-                (["config", "extensions", "music_overlay.js", "adblock.js"], "Registering extensions"),
+                (["config", "extensions", "music_overlay.js"], "Registering extensions"),
+                (["config", "extensions", "adblock.js",], "Blocking ads"),
                 (["backup", "apply"], "Applying fresh patch")
             ]
 
