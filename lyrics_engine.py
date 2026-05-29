@@ -3,23 +3,73 @@ import re
 from PyQt6.QtCore import QThread, pyqtSignal
 import sys
 from PyQt6.QtWidgets import QApplication
-from collections import namedtuple
+from collections import namedtuple, OrderedDict
+import os
+import json
 
 LyricLine = namedtuple("LyricLine", ['timestamp', 'content'])
 
+class LyricsCache:
+    def __init__(self, capacity=500, filename="lyrics_cache.json"):
+        self.capacity = capacity
+        self.filename = filename
+        self.cache = self._load_from_disk()
+
+    def _load_from_disk(self):
+        if os.path.exists(self.filename):
+            try:
+                with open(self.filename, 'r', encoding='utf-8') as f:
+                    data = json.load(f)
+                    return OrderedDict(data)
+            except (json.JSONDecodeError, IOError):
+                return OrderedDict()
+        return OrderedDict()
+    
+    def save_to_disk(self):
+        with open(self.filename, 'w', encoding='utf-8') as f:
+            json.dump(list(self.cache.items()), f, indent=4)
+    
+    def get(self, song_name):
+        if song_name not in self.cache:
+            return None
+        self.cache.move_to_end(song_name)
+        return self.cache[song_name]
+    
+    def put(self, dict_key, track_id, lyrics, force_overwrite=False):
+        if dict_key in self.cache:
+            self.cache.move_to_end(dict_key)
+            if not force_overwrite and self.cache[dict_key].get('id') != track_id:
+                return
+
+        self.cache[dict_key] = {
+            "id": track_id,
+            "lyrics": lyrics
+        }
+
+        if len(self.cache) > self.capacity:
+            self.cache.popitem(last=False)
+
+    
+
 class LyricsThread(QThread):
-    lyrics_loaded = pyqtSignal(list, object) 
+    lyrics_loaded = pyqtSignal(list, object)
 
     def __init__(self):
         super().__init__()
+        self.cache = LyricsCache()
         self.track = ""
         self.artist = ""
         self.duration = 0.0
         self.saved_id = None
         self.cached_results =[]
         self.current_result_idx = 0
+        self.direction = 1
 
-    def fetch(self, track, artist, duration=0.0, saved_id=None):
+    def fetch(self, track, artist, duration=0.0, saved_id=None, force_fetch=False):
+        self.cached_results = [] 
+        self.current_result_idx = 0
+        self.force_fetch = force_fetch
+
         self.track = track
         self.artist = artist
         self.duration = duration
@@ -36,12 +86,22 @@ class LyricsThread(QThread):
             current_artist = self.artist
             current_duration = self.duration
             current_id = self.saved_id
+            dict_key = f"{current_track}::{current_artist}"
+
+            if not self.cached_results and not self.force_fetch:
+                cached_data = self.cache.get(dict_key)
+                if cached_data:
+                    print(f"CACHE HIT: {dict_key}")
+                    self.saved_id = cached_data['id'] 
+                    parsed = self.parse_lrc(cached_data['lyrics'])
+                    self.lyrics_loaded.emit(parsed, cached_data['id'])
+                    break
             
             base_url = "https://lrclib.net/api/search"
             params = {"track_name": current_track, "artist_name": current_artist}
             
             try:
-                self._emit_fetching()
+                self._emit_fetching(self.force_fetch)
                 response = requests.get(base_url, params=params)#, timeout=10)
                 
                 # if the user skipped the song during the network delay, loop back
@@ -66,7 +126,9 @@ class LyricsThread(QThread):
                                 self._sort_and_pick_best(current_duration)
                         else:
                             self._sort_and_pick_best(current_duration)
-                            
+
+                        if self.force_fetch:
+                            self.cycle_version(self.direction)    
                         self._emit_current()
                         break
                 
@@ -88,19 +150,34 @@ class LyricsThread(QThread):
         self.current_result_idx = 0
 
     def cycle_version(self, direction=1):
+        self.direction = direction
         if not self.cached_results:
+            print("Re-fetching Lyrics")
+            self.fetch(track=self.track, artist=self.artist, duration=self.duration, saved_id=self.saved_id, force_fetch=True)
             return
         self.current_result_idx = (self.current_result_idx + direction) % len(self.cached_results)
         print(f"Lyrics: Switched to version {self.current_result_idx + 1} of {len(self.cached_results)}")
         self._emit_current()
 
-    def _emit_fetching(self):
-        self.lyrics_loaded.emit([LyricLine(0.0, "Fetching Lyrics...")], None)
+    def _emit_fetching(self, refetching=False):
+        if not refetching:
+            self.lyrics_loaded.emit([LyricLine(0.0, "Fetching Lyrics...")], None)
+        else:
+            self.lyrics_loaded.emit([LyricLine(0.0, "Re-Fetching Lyrics...")], None)
 
     def _emit_current(self):
+        if not self.cached_results: return
         result = self.cached_results[self.current_result_idx]
-        parsed = self.parse_lrc(result.get('syncedLyrics'))
-        self.lyrics_loaded.emit(parsed, result.get('id'))
+        lrc = result.get('syncedLyrics')
+        lrc_id = result.get('id')
+
+        dict_key = f"{self.track}::{self.artist}"
+
+        self.cache.put(dict_key, lrc_id, lrc, force_overwrite=False)
+        self.cache.save_to_disk()
+
+        parsed = self.parse_lrc(lrc)
+        self.lyrics_loaded.emit(parsed, lrc_id)
 
     def _emit_failed(self):
         self.lyrics_loaded.emit([LyricLine(0.0, "No Lyrics Available")], None)
@@ -123,6 +200,19 @@ class LyricsThread(QThread):
                 lyrics_list.append(LyricLine(total_time, text))
 
         return lyrics_list
+
+    def whitelist_current(self):
+        if not self.cached_results:
+            return
+
+        result = self.cached_results[self.current_result_idx]
+        lrc = result.get('syncedLyrics')
+        lrc_id = result.get('id')
+        dict_key = f"{self.track}::{self.artist}"
+
+        self.cache.put(dict_key, lrc_id, lrc, force_overwrite=True)
+        self.cache.save_to_disk()
+        print(f"Cache Updated: Whitelisted {lrc_id} for {dict_key}")
     
 if __name__ == "__main__":
     app = QApplication(sys.argv)

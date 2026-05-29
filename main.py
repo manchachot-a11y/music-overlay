@@ -901,6 +901,8 @@ class MusicOverlay(QWidget):
                     
                 self.saved_lyrics[dict_key] = self.current_lrc_id
                 self.save_position() 
+                self.lyric_engine.whitelist_current()
+                
                 print(f"Whitelisted version {self.current_lrc_id} for {dict_key}")
         elif action == next_lyric_action:
             self.lyric_engine.cycle_version(1)
