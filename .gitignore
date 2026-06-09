@@ -5,3 +5,4 @@ dist/**
 build/**
 *.spec
 ui_config.json
+lyrics_cache.json
