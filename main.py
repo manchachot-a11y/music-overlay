@@ -129,22 +129,34 @@ class AudioThread(QThread):
         except Exception:
             pass
 
-        default_speaker_name = str(sc.default_speaker().name)
-        loopback_mic = sc.get_microphone(id=default_speaker_name, include_loopback=True)
+        while self.running:
+            try:
+                current_speaker = sc.default_speaker()
+                current_speaker_name = str(current_speaker.name)
 
-        with loopback_mic.recorder(samplerate=48000) as mic:
-            while self.running:
-                with warnings.catch_warnings(record=True) as caught:
-                    warnings.simplefilter("always")
-                    data = mic.record(numframes=1024)
+                loopback_mic = sc.get_microphone(id=current_speaker_name, include_loopback=True)
 
-                had_discontinuity = any(
-                    issubclass(w.category, SoundcardRuntimeWarning) for w in caught
-                )
+                with loopback_mic.recorder(samplerate=48000) as mic:
+                    while self.running:
+                        if str(sc.default_speaker().name) != current_speaker_name:
+                            print("System default device changed. Reconnecting audio stream...")
+                            break
 
-                with self._buffer_lock:
-                    self._raw_buffer.append((data, had_discontinuity))
-                self._data_ready.set()
+                        with warnings.catch_warnings(record=True) as caught:
+                            warnings.simplefilter("always")
+                            data = mic.record(numframes=1024)
+
+                        had_discontinuity = any(
+                            issubclass(w.category, SoundcardRuntimeWarning) for w in caught
+                        )
+
+                        with self._buffer_lock:
+                            self._raw_buffer.append((data, had_discontinuity))
+                        self._data_ready.set()
+            except Exception as e:
+                print(f"Audio stream error: {e}. Retrying in 1 second...")
+                self.msleep(1.0)
+    
 
     def _process_frame(self, payload):
         data, had_discontinuity = payload
